@@ -420,24 +420,50 @@ runs:
               echo ""
               echo "🔐 Checking tag signature..."
 
-              # Get tag verification output
-              verify_output=$(git verify-tag --raw "$tag_name" 2>&1 || true)
+              # Check if this is an annotated tag (has a tag object) or lightweight tag
+              tag_object_sha=$(git rev-parse "$tag_name")
+              tag_object_type=$(git cat-file -t "$tag_object_sha" 2>/dev/null || echo "unknown")
 
-              # Check for GPG signature
-              if echo "$verify_output" | grep -qE "\[GNUPG:\] (GOODSIG|VALIDSIG|ERRSIG)"; then
-                signing_type="gpg"
-                echo "✓ Tag is signed with GPG key 🔑"
-              # Check for SSH signature (Git 2.34+)
-              elif echo "$verify_output" | grep -qi "Good \"git\" signature.*with.*key"; then
-                signing_type="ssh"
-                echo "✓ Tag is signed with SSH key 🔑"
-              # Alternative SSH detection via tag object
-              elif git cat-file tag "$tag_name" 2>/dev/null | grep -q "^-----BEGIN SSH SIGNATURE-----"; then
-                signing_type="ssh"
-                echo "✓ Tag is signed with SSH key 🔑"
-              else
+              echo "DEBUG: Tag object SHA: $tag_object_sha"
+              echo "DEBUG: Tag object type: $tag_object_type"
+
+              if [ "$tag_object_type" != "tag" ]; then
+                echo "ℹ️  Lightweight tag detected (no tag object, cannot be signed)"
                 signing_type="unsigned"
-                echo "ℹ️  Tag is not signed"
+              else
+                echo "✓ Annotated tag detected (has tag object)"
+
+                # Get tag verification output
+                verify_output=$(git verify-tag --raw "$tag_name" 2>&1 || true)
+
+                # Debug: Show verify output
+                echo "DEBUG: git verify-tag output:"
+                echo "$verify_output"
+                echo "---"
+
+                # Check for GPG signature
+                if echo "$verify_output" | grep -qE "\[GNUPG:\] (GOODSIG|VALIDSIG|ERRSIG)"; then
+                  signing_type="gpg"
+                  echo "✓ Tag is signed with GPG key 🔑"
+                # Check for SSH signature (Git 2.34+)
+                elif echo "$verify_output" | grep -qi "Good \"git\" signature.*with.*key"; then
+                  signing_type="ssh"
+                  echo "✓ Tag is signed with SSH key 🔑"
+                # Alternative SSH detection via tag object
+                else
+                  # Debug: Show cat-file output
+                  echo "DEBUG: Checking git cat-file output for SSH signature:"
+                  git cat-file tag "$tag_name" 2>&1 || echo "cat-file failed"
+                  echo "---"
+
+                  if git cat-file tag "$tag_name" 2>/dev/null | grep -q "-----BEGIN SSH SIGNATURE-----"; then
+                    signing_type="ssh"
+                    echo "✓ Tag is signed with SSH key 🔑"
+                  else
+                    signing_type="unsigned"
+                    echo "ℹ️  Tag is not signed"
+                  fi
+                fi
               fi
             else
               echo "⚠️  Tag not found in repository, cannot verify signature"
