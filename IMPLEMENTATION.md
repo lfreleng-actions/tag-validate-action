@@ -237,10 +237,14 @@ When a tag matches both patterns, the `tag_type` output becomes `both`. This all
 # Run git verify-tag with raw output
 verify_output=$(git verify-tag --raw "$tag_name" 2>&1 || true)
 
-# Check for GPG markers
-if echo "$verify_output" | \
-  grep -qE "\[GNUPG:\] (GOODSIG|VALIDSIG|ERRSIG)"; then
+# Check for GPG markers, BADSIG first for security
+if echo "$verify_output" | grep -q "\[GNUPG:\] BADSIG"; then
+  signing_type="invalid"
+elif echo "$verify_output" | \
+  grep -qE "\[GNUPG:\] (GOODSIG|VALIDSIG)"; then
   signing_type="gpg"
+elif echo "$verify_output" | grep -q "\[GNUPG:\] ERRSIG"; then
+  signing_type="gpg-unverifiable"
 fi
 ```
 
@@ -248,6 +252,7 @@ fi
 
 - `GOODSIG` - Good signature, key in keyring and trusted
 - `VALIDSIG` - Valid signature structure
+- `BADSIG` - Signature verification failed (corrupted or tampered)
 - `ERRSIG` - Signature present but verification failed (key not trusted/available)
 
 **Tag Object Structure:**
@@ -271,13 +276,17 @@ iQIzBAABCAAdFiEE...
 **Detection Method:**
 
 ```bash
-# Check for SSH-specific markers in verification output
-if echo "$verify_output" | grep -qi "Good \"git\" signature.*with.*key"; then
+# Primary: Check for SSH-specific markers in verification output (Git 2.34+)
+# NOTE: Git outputs 'Good "git" signature' for SSH signatures, not "SSH"
+if echo "$verify_output" | grep -Eq '^Good "git" signature'; then
   signing_type="ssh"
 fi
 
-# Alternative: Check tag object directly
-if git cat-file tag "$tag_name" | grep -q "^-----BEGIN SSH SIGNATURE-----"; then
+# Alternative: Check tag object directly for complete signature block (robust method)
+# Verify both BEGIN and END markers exist separately to prevent false positives
+# (e.g., two BEGIN markers and no END would incorrectly pass a count-based check)
+if git cat-file tag "$tag_name" | grep -q '^-----BEGIN SSH SIGNATURE-----$' && \
+   git cat-file tag "$tag_name" | grep -q '^-----END SSH SIGNATURE-----$'; then
   signing_type="ssh"
 fi
 ```
@@ -403,17 +412,20 @@ require_signed=$(echo "${{ inputs.require_signed }}" | \
 **Validation Matrix:**
 
 ```text
-┌────────────────┬──────────────┬─────────────────────────────────┐
-│ require_signed │ signing_type │  Result                         │
-├────────────────┼──────────────┼─────────────────────────────────┤
-│ ambivalent     │  any         │  ✅ Pass (no enforcement)       │
-│ true           │  unsigned    │  ❌ Fail "Tag NOT signed"       │
-│ true           │  ssh/gpg     │  ✅ Pass "Tag signed"           │
-│ ssh            │  ssh         │  ✅ Pass "SSH signed"           │
-│ ssh            │  gpg         │  ❌ Fail "GPG signed"           │
-│ ssh            │  unsigned    │  ❌ Fail "NOT signed"           │
-│ gpg            │  gpg         │  ✅ Pass "GPG signed"           │
-│ gpg            │  ssh         │  ❌ Fail "SSH signed"           │
+┌────────────────┬───────────────────┬─────────────────────────────────┐
+│ require_signed │ signing_type      │  Result                         │
+├────────────────┼───────────────────┼─────────────────────────────────┤
+│ ambivalent     │  any              │  ✅ Pass (no enforcement)       │
+│ true           │  unsigned         │  ❌ Fail "Tag NOT signed"       │
+│ true           │  ssh/gpg          │  ✅ Pass "Tag signed"           │
+│ true           │  gpg-unverifiable │  ❌ Fail "Unverifiable"         │
+│ ssh            │  ssh              │  ✅ Pass "SSH signed"           │
+│ ssh            │  gpg              │  ❌ Fail "GPG signed"           │
+│ ssh            │  gpg-unverifiable │  ❌ Fail "GPG signed"           │
+│ ssh            │  unsigned         │  ❌ Fail "NOT signed"           │
+│ gpg            │  gpg              │  ✅ Pass "GPG signed"           │
+│ gpg            │  gpg-unverifiable │  ❌ Fail "Unverifiable"         │
+│ gpg            │  ssh              │  ❌ Fail "SSH signed"           │
 │ gpg            │  unsigned    │  ❌ Fail "NOT signed"           │
 │ false          │  unsigned    │  ✅ Pass "unsigned"             │
 │ false          │  ssh/gpg     │  ❌ Fail "signed"               │

@@ -59,14 +59,14 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Output            | Values                        | Description             |
-| ----------------- | ----------------------------- | ----------------------- |
-| `valid`           | `true`, `false`               | Check passed?           |
-| `tag_type`        | `semver`, `calver`, `unknown` | Detected version format |
-| `signing_type`    | `unsigned`, `ssh`, `gpg`      | Signature type          |
-| `development_tag` | `true`, `false`               | Contains dev keywords?  |
-| `version_prefix`  | `true`, `false`               | Has v/V prefix?         |
-| `tag_name`        | String                        | Tag under inspection    |
+| Output            | Values                                                                 | Description             |
+| ----------------- | ---------------------------------------------------------------------- | ----------------------- |
+| `valid`           | `true`, `false`                                                        | Check passed?           |
+| `tag_type`        | `semver`, `calver`, `unknown`                                          | Detected version format |
+| `signing_type`    | `unsigned`, `ssh`, `gpg`, `gpg-unverifiable`, `lightweight`, `invalid` | Signature type          |
+| `development_tag` | `true`, `false`                                                        | Contains dev keywords?  |
+| `version_prefix`  | `true`, `false`                                                        | Has v/V prefix?         |
+| `tag_name`        | String                                                                 | Tag under inspection    |
 
 <!-- markdownlint-enable MD013 -->
 
