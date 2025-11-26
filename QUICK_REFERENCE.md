@@ -44,14 +44,14 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Input | Values | Default | Description |
-|-------|--------|---------|-------------|
-| `tag_location` | `ORG/REPO/TAG` | `''` | Remote tag path |
-| `tag_string` | Any string | `''` | Tag string to check |
-| `require_type` | `semver`, `calver`, `none` | `none` | Required format |
-| `require_signed` | `true`, `ssh`, `gpg`, `false`, `ambivalent` | `ambivalent` | Signature rule |
-| `permit_missing` | `true`, `false` | `false` | Allow missing tags |
-| `token` | GitHub token | `''` | Token for authenticated API calls |
+| Input            | Values                                      | Default      | Description                       |
+| ---------------- | ------------------------------------------- | ------------ | --------------------------------- |
+| `tag_location`   | `ORG/REPO/TAG`                              | `''`         | Remote tag path                   |
+| `tag_string`     | Any string                                  | `''`         | Tag string to check               |
+| `require_type`   | `semver`, `calver`, `none`                  | `none`       | Required format                   |
+| `require_signed` | `true`, `ssh`, `gpg`, `false`, `ambivalent` | `ambivalent` | Signature rule                    |
+| `permit_missing` | `true`, `false`                             | `false`      | Allow missing tags                |
+| `token`          | GitHub token                                | `''`         | Token for authenticated API calls |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -59,14 +59,14 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Output | Values | Description |
-|--------|--------|-------------|
-| `valid` | `true`, `false` | Check passed? |
-| `tag_type` | `semver`, `calver`, `unknown` | Detected version format |
-| `signing_type` | `unsigned`, `ssh`, `gpg` | Signature type |
-| `development_tag` | `true`, `false` | Contains dev keywords? |
-| `version_prefix` | `true`, `false` | Has v/V prefix? |
-| `tag_name` | String | Tag under inspection |
+| Output            | Values                        | Description             |
+| ----------------- | ----------------------------- | ----------------------- |
+| `valid`           | `true`, `false`               | Check passed?           |
+| `tag_type`        | `semver`, `calver`, `unknown` | Detected version format |
+| `signing_type`    | `unsigned`, `ssh`, `gpg`      | Signature type          |
+| `development_tag` | `true`, `false`               | Contains dev keywords?  |
+| `version_prefix`  | `true`, `false`               | Has v/V prefix?         |
+| `tag_name`        | String                        | Tag under inspection    |
 
 <!-- markdownlint-enable MD013 -->
 

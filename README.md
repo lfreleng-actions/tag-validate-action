@@ -76,14 +76,14 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name            | Required | Default      | Description                                                           |
-|-----------------|----------|--------------|-----------------------------------------------------------------------|
-| tag_location    | False    | ''           | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)       |
-| tag_string      | False    | ''           | Tag string to check (version format, signature check skipped)         |
-| require_type    | False    | none         | Required tag type: `semver`, `calver`, or `none`                      |
-| require_signed  | False    | ambivalent   | Signature rule: `true`, `ssh`, `gpg`, `false`, or `ambivalent` |
-| permit_missing  | False    | false        | Allow missing tags without error                                      |
-| token           | False    | ''           | GitHub token for authenticated API calls and private repository access |
+| Name           | Required | Default    | Description                                                            |
+| -------------- | -------- | ---------- | ---------------------------------------------------------------------- |
+| tag_location   | False    | ''         | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)         |
+| tag_string     | False    | ''         | Tag string to check (version format, signature check skipped)          |
+| require_type   | False    | none       | Required tag type: `semver`, `calver`, or `none`                       |
+| require_signed | False    | ambivalent | Signature rule: `true`, `ssh`, `gpg`, `false`, or `ambivalent`         |
+| permit_missing | False    | false      | Allow missing tags without error                                       |
+| token          | False    | ''         | GitHub token for authenticated API calls and private repository access |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -183,14 +183,14 @@ is automatically available.
 
 <!-- markdownlint-disable MD013 -->
 
-| Name            | Description                                                    |
-|-----------------|----------------------------------------------------------------|
-| valid           | Set to `true` if tag passes all validation checks              |
-| tag_type        | Detected tag type: `semver`, `calver`, `both`, or `unknown`    |
-| signing_type    | Signing method used: `unsigned`, `ssh`, or `gpg`  |
-| development_tag | Set to `true` if tag contains pre-release/development strings  |
-| version_prefix  | Set to `true` if tag has leading v/V character                 |
-| tag_name        | The tag name under inspection                                   |
+| Name            | Description                                                   |
+| --------------- | ------------------------------------------------------------- |
+| valid           | Set to `true` if tag passes all validation checks             |
+| tag_type        | Detected tag type: `semver`, `calver`, `both`, or `unknown`   |
+| signing_type    | Signing method used: `unsigned`, `ssh`, or `gpg`              |
+| development_tag | Set to `true` if tag contains pre-release/development strings |
+| version_prefix  | Set to `true` if tag has leading v/V character                |
+| tag_name        | The tag name under inspection                                 |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -424,7 +424,7 @@ For remote tag validation, the action can use authenticated or anonymous API cal
 ### Type Validation
 
 | require_type | tag_type | Result |
-|--------------|----------|--------|
+| ------------ | -------- | ------ |
 | `none`       | any      | ✅ Pass |
 | `semver`     | `semver` | ✅ Pass |
 | `semver`     | `both`   | ✅ Pass |
@@ -435,19 +435,19 @@ For remote tag validation, the action can use authenticated or anonymous API cal
 
 ### Signature Validation
 
-| require_signed | signing_type | Result |
-|----------------|--------------|--------|
+| require_signed | signing_type | Result          |
+| -------------- | ------------ | --------------- |
 | `ambivalent`   | any          | ✅ Pass (always) |
-| `true`         | `unsigned`   | ❌ Fail |
-| `true`         | `ssh`/`gpg`  | ✅ Pass |
-| `ssh`          | `ssh`        | ✅ Pass |
-| `ssh`          | `gpg`        | ❌ Fail |
-| `ssh`          | `unsigned`   | ❌ Fail |
-| `gpg`          | `gpg`        | ✅ Pass |
-| `gpg`          | `ssh`        | ❌ Fail |
-| `gpg`          | `unsigned`   | ❌ Fail |
-| `false`        | `unsigned`   | ✅ Pass |
-| `false`        | `ssh`/`gpg`  | ❌ Fail |
+| `true`         | `unsigned`   | ❌ Fail          |
+| `true`         | `ssh`/`gpg`  | ✅ Pass          |
+| `ssh`          | `ssh`        | ✅ Pass          |
+| `ssh`          | `gpg`        | ❌ Fail          |
+| `ssh`          | `unsigned`   | ❌ Fail          |
+| `gpg`          | `gpg`        | ✅ Pass          |
+| `gpg`          | `ssh`        | ❌ Fail          |
+| `gpg`          | `unsigned`   | ❌ Fail          |
+| `false`        | `unsigned`   | ✅ Pass          |
+| `false`        | `ssh`/`gpg`  | ❌ Fail          |
 
 ## Troubleshooting
 

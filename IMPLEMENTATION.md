@@ -461,14 +461,14 @@ The action generates a formatted summary in `GITHUB_STEP_SUMMARY`:
 ```markdown
 ## 🏷️ Tag Validation Results
 
-| Property | Value |
-|----------|-------|
-| Tag Name | `v1.0.0` |
-| Tag Type | `semver` |
-| Signing Type | `gpg` |
-| Development Tag | `false` |
-| Version Prefix | `true` |
-| Valid | `true` |
+| Property        | Value    |
+| --------------- | -------- |
+| Tag Name        | `v1.0.0` |
+| Tag Type        | `semver` |
+| Signing Type    | `gpg`    |
+| Development Tag | `false`  |
+| Version Prefix  | `true`   |
+| Valid           | `true`   |
 
 ✅ **Tag validation passed**
 
