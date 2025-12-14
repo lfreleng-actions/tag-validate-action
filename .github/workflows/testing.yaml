@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Test SemVer string - valid"
         uses: ./
@@ -149,7 +149,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
@@ -211,7 +211,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Test remote tag - semantic versioning"
         uses: ./
@@ -300,21 +300,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout test-tags-semantic repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
           path: test-repo-semver
 
       - name: "Checkout test-tags-calver repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
           path: test-repo-calver
 
       - name: "Checkout action repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           path: action-code
 
@@ -489,7 +489,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
@@ -540,7 +540,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Test alpha tag"
         uses: ./
@@ -605,7 +605,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Test tag_location takes priority over tag_string"
         uses: ./
@@ -635,7 +635,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Test empty tag_string with permit_missing=true"
         uses: ./
