@@ -100,7 +100,7 @@ repos:
       - id: codespell
 
   - repo: https://github.com/lfreleng-actions/gha-workflow-linter
-    rev: 383f4b685c20fad9fec1b61909745ed1d5ab1eb0  # frozen: v0.1.13
+    rev: 100fffb1dffb802767871aae69687b165e4bf782  # frozen: v0.1.13
     hooks:
       - id: gha-workflow-linter
         args: [lint, ., --verbose]
