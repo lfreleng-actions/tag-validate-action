@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+[build-system]
+requires = ["hatchling>=1.24", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tag-validate"
+dynamic = ["version"]
+description = "GitHub tag validation tool with cryptographic signature verification and GitHub key registry checks"
+authors = [
+    { name = "Matthew Watkins", email = "93649628+ModeSevenIndustrialSolutions@users.noreply.github.com" },
+]
+license = "Apache-2.0"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: Unix",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = [
+  # Use dependamerge for GitHub API infrastructure
+  "dependamerge>=0.1.19",
+
+  # Core dependencies (some inherited from dependamerge)
+  "aiolimiter>=1.2.1",
+  "httpx[http2]>=0.28.1",
+  "pydantic>=2.12.5",
+  "rich>=14.2.0",
+  "typer>=0.21.1",
+
+  # Additional dependencies for tag validation
+  "python-gnupg>=0.5.3",      # GPG signature parsing
+  "cryptography>=46.0.3",     # SSH key parsing and crypto operations
+  "packaging>=24.2",          # Version parsing utilities
+]
+
+[project.urls]
+Homepage = "https://github.com/lfreleng-actions/tag-validate-action"
+Repository = "https://github.com/lfreleng-actions/tag-validate-action"
+"Bug Tracker" = "https://github.com/lfreleng-actions/tag-validate-action/issues"
+Documentation = "https://github.com/lfreleng-actions/tag-validate-action/blob/main/README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-mock>=3.15.1",
+    "pytest-cov>=7.0.0",
+    "coverage[toml]>=7.13.1",
+    "responses>=0.25.8",
+    "black>=25.12.0",
+    "ruff>=0.14.11",
+    "mypy>=1.19.1",
+    "types-requests>=2.32.4.20250809",
+]
+
+[project.scripts]
+tag-validate = "tag_validate.cli:app"
+
+# Hatch dynamic versioning from VCS (tags)
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+# Generate version file at build time
+[tool.hatch.build.hooks.vcs]
+version-file = "src/tag_validate/_version.py"
+
+# Wheel build configuration (src layout)
+[tool.hatch.build.targets.wheel]
+packages = ["src/tag_validate"]
+
+# sdists: include everything by default
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "LICENSE*", "pyproject.toml"]
+
+# Dependency group for uv (mirrors dev extra)
+[dependency-groups]
+dev = [
+  "pytest>=9.0.2",
+  "pytest-asyncio>=1.3.0",
+  "pytest-mock>=3.15.1",
+  "pytest-cov>=7.0.0",
+  "coverage[toml]>=7.13.1",
+  "responses>=0.25.8",
+  "black>=25.12.0",
+  "ruff>=0.14.11",
+  "mypy>=1.19.1",
+  "types-requests>=2.32.4.20250809",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+  "tests/",
+]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+  "-v",
+  "--tb=short",
+  "--cov=tag_validate",
+  "--cov-report=html",
+  "--cov-report=term-missing",
+]
+markers = [
+  "integration: marks tests as integration tests (require network/external repos)",
+  "asyncio: marks tests as async tests",
+  "slow: marks tests as slow (deselect with -m 'not slow')",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "src/tag_validate/_version.py"]
+data_file = ".coverage"
+
+[tool.coverage.html]
+directory = "coverage_html_report"
+
+[tool.coverage.paths]
+source = [
+    "src/",
+    "*/site-packages/",
+]
+
+[tool.coverage.report]
+fail_under = 60
+skip_empty = true
+ignore_errors = false
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.black]
+line-length = 88
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+  "E",      # pycodestyle errors
+  "W",      # pycodestyle warnings
+  "F",      # pyflakes
+  "I",      # isort
+  "B",      # flake8-bugbear
+  "C4",     # flake8-comprehensions
+  "UP",     # pyupgrade
+  "SIM",    # flake8-simplify
+]
+ignore = [
+  "E501",   # line too long (handled by black)
+  "B008",   # do not perform function calls in argument defaults
+  "C901",   # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*" = ["S101", "D"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tag_validate"]
