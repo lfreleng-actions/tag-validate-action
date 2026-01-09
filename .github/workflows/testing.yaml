@@ -498,7 +498,7 @@ jobs:
         uses: ./action-code
         id: gpg-unverifiable-semver
         with:
-          tag_location: test-repo-semver/v0.1.5-gpg-mwatkins
+          tag_location: test-repo-semver/v0.1.6-gpg-unknown
 
       - name: "Verify GPG-unverifiable signature detection (semver)"
         shell: bash
@@ -508,7 +508,7 @@ jobs:
           if [ "${{ steps.gpg-unverifiable-semver.outputs.signing_type }}" \
             != "gpg-unverifiable" ]; then
             echo "Error: Expected signing_type=gpg-unverifiable for" \
-                 "v0.1.5-gpg-mwatkins (signed with unknown key)"
+                 "v0.1.6-gpg-unknown (signed with unknown key)"
             exit 1
           fi
           echo "✓ GPG-unverifiable signature detected correctly (semver)"
@@ -518,7 +518,7 @@ jobs:
         uses: ./action-code
         id: gpg-unverifiable-calver
         with:
-          tag_location: test-repo-calver/2025.1.5-gpg-mwatkins
+          tag_location: test-repo-calver/2025.1.6-gpg-unknown
 
       - name: "Verify GPG-unverifiable signature detection (calver)"
         shell: bash
@@ -528,7 +528,7 @@ jobs:
           if [ "${{ steps.gpg-unverifiable-calver.outputs.signing_type }}" \
             != "gpg-unverifiable" ]; then
             echo "Error: Expected signing_type=gpg-unverifiable for" \
-                 "2025.1.5-gpg-mwatkins (signed with unknown key)"
+                 "2025.1.6-gpg-unknown (signed with unknown key)"
             exit 1
           fi
           echo "✓ GPG-unverifiable signature detected correctly (calver)"
@@ -539,7 +539,7 @@ jobs:
         id: require-signed-unverifiable
         continue-on-error: true
         with:
-          tag_location: test-repo-semver/v0.1.5-gpg-mwatkins
+          tag_location: test-repo-semver/v0.1.6-gpg-unknown
           require_signed: true
 
       - name: "Verify require_signed=true rejects GPG-unverifiable tag"
@@ -623,6 +623,119 @@ jobs:
         with:
           tag_location: test-repo-semver/v0.1.2-unsigned
           require_signed: ambivalent
+
+  ### Test Local SSH-Signed Tags ###
+  test-local-ssh-tags:
+    name: "Test Local SSH-Signed Tags"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: "Checkout repository with all tags"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: "Setup SSH allowed signers file"
+        shell: bash
+        run: |
+          echo "Setting up SSH allowed signers file"
+          # Use the committed .ssh-allowed-signers file from the repository
+          git config gpg.ssh.allowedSignersFile .ssh-allowed-signers
+
+          echo "✓ SSH allowed signers file configured"
+          cat .ssh-allowed-signers
+
+      - name: "Verify SSH signature on v0.1.0"
+        shell: bash
+        run: |
+          echo "Verifying v0.1.0 SSH signature with Git"
+          git verify-tag v0.1.0
+          echo "✓ v0.1.0 SSH signature verified"
+
+      - name: "Verify SSH signature on v0.1.1"
+        shell: bash
+        run: |
+          echo "Verifying v0.1.1 SSH signature with Git"
+          git verify-tag v0.1.1
+          echo "✓ v0.1.1 SSH signature verified"
+
+      - name: "Install Python package"
+        shell: bash
+        run: |
+          pip install -e .
+
+      - name: "Test v0.1.0 with Python CLI (SSH-signed)"
+        shell: bash
+        run: |
+          echo "Testing v0.1.0 with Python CLI"
+          tag-validate verify v0.1.0 --require-type semver \
+            --require-signed true --json > result.json
+          cat result.json
+
+          # Check success
+          if [ "$(jq -r '.success' result.json)" != "true" ]; then
+            echo "Error: Validation failed"
+            jq '.' result.json
+            exit 1
+          fi
+
+          # Check version type
+          if [ "$(jq -r '.version_type' result.json)" != "semver" ]; then
+            echo "Error: Expected version_type=semver"
+            exit 1
+          fi
+
+          # Check signature type
+          if [ "$(jq -r '.signature_type' result.json)" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+
+          # Check signature verified
+          if [ "$(jq -r '.signature_verified' result.json)" != "true" ]; then
+            echo "Error: Expected signature_verified=true"
+            exit 1
+          fi
+
+          echo "✓ v0.1.0 validated correctly as SSH-signed SemVer"
+
+      - name: "Test v0.1.1 with Python CLI (SSH-signed)"
+        shell: bash
+        run: |
+          echo "Testing v0.1.1 with Python CLI"
+          tag-validate verify v0.1.1 --require-type semver \
+            --require-signed true --json > result.json
+          cat result.json
+
+          # Check success
+          if [ "$(jq -r '.success' result.json)" != "true" ]; then
+            echo "Error: Validation failed"
+            jq '.' result.json
+            exit 1
+          fi
+
+          # Check version type
+          if [ "$(jq -r '.version_type' result.json)" != "semver" ]; then
+            echo "Error: Expected version_type=semver"
+            exit 1
+          fi
+
+          # Check signature type
+          if [ "$(jq -r '.signature_type' result.json)" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+
+          # Check signature verified
+          if [ "$(jq -r '.signature_verified' result.json)" != "true" ]; then
+            echo "Error: Expected signature_verified=true"
+            exit 1
+          fi
+
+          echo "✓ v0.1.1 validated correctly as SSH-signed SemVer"
 
   ### Test Signature Requirements ###
   test-signature-requirements:
@@ -831,8 +944,371 @@ jobs:
           echo "✓ Edge cases handled correctly"
 
   ### Summary ###
+  ### Python Package Tests ###
+  test-python-validation:
+    name: "Test Python Version Validation"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: "Install package with dev dependencies"
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: "Test SemVer validation"
+        shell: bash
+        run: |
+          # Test SemVer validation
+          tag-validate validate "v1.2.3" --json | \
+            jq -e '.success == true and .version_type == "semver"'
+
+          tag-validate validate "1.0.0" --json | \
+            jq -e '.success == true and .major == 1'
+
+      - name: "Test CalVer validation"
+        shell: bash
+        run: |
+          # Test CalVer validation
+          tag-validate validate "2024.01.15" --json | \
+            jq -e '.success == true and .version_type == "calver"'
+
+          tag-validate validate "v2024.12.31" --json | \
+            jq -e '.success == true and .year == 2024'
+
+      - name: "Test development version detection"
+        shell: bash
+        run: |
+          # Test development version detection
+          tag-validate validate "v1.2.3-alpha" --json | \
+            jq -e '.development_tag == true'
+
+          tag-validate validate "v1.2.3-beta.1" --json | \
+            jq -e '.development_tag == true'
+
+          tag-validate validate "v1.2.3" --json | \
+            jq -e '.development_tag == false'
+
+      - name: "Test version type requirements"
+        shell: bash
+        run: |
+          # Test requiring specific version type
+          tag-validate validate "v1.2.3" --require-type semver \
+            --json | jq -e '.success == true'
+
+          # This should fail - wrong type
+          if tag-validate validate "v1.2.3" --require-type calver \
+            --json 2>&1; then
+            echo "ERROR: Should have failed for wrong version type"
+            exit 1
+          fi
+
+      - name: "Test strict SemVer mode"
+        shell: bash
+        run: |
+          # Strict mode should reject prefix
+          if tag-validate validate "v1.2.3" --strict-semver \
+            --json 2>&1; then
+            echo "ERROR: Strict mode should reject 'v' prefix"
+            exit 1
+          fi
+
+          # Strict mode should accept without prefix
+          tag-validate validate "1.2.3" --strict-semver --json | \
+            jq -e '.success == true'
+
+  test-python-signature-detection:
+    name: "Test Python Signature Detection"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: "Checkout test repo (SemVer)"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          repository: lfreleng-actions/test-tags-semantic
+          fetch-depth: 0
+          path: test-repo-semver
+
+      - name: "Checkout test repo (CalVer)"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          repository: lfreleng-actions/test-tags-calver
+          fetch-depth: 0
+          path: test-repo-calver
+
+      - name: "Checkout action code"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          path: action-code
+
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: "Install package with dev dependencies"
+        shell: bash
+        working-directory: action-code
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: "Import GPG test key for signature verification"
+        id: import-gpg
+        # Allow failure when GPG_PRIVATE_KEY secret is not set
+        continue-on-error: true
+        # yamllint disable-line rule:line-length
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          trust_level: ultimate
+
+      - name: "Check GPG key availability"
+        id: check-gpg-key
+        shell: bash
+        run: |
+          if gpg --list-secret-keys "test@tag-validate-action.local" \
+            &>/dev/null; then
+            echo "gpg_available=true" >> "$GITHUB_OUTPUT"
+            echo "✓ GPG test key available for verification"
+          else
+            echo "gpg_available=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️  GPG key not available (expected for PR from fork)"
+            echo "ℹ️  Tests will verify detection without verification"
+          fi
+
+      - name: "Test GPG signature detection (SemVer)"
+        if: steps.check-gpg-key.outputs.gpg_available == 'true'
+        shell: bash
+        run: |
+          # Test GPG signature detection
+          cd test-repo-semver
+          tag-validate detect v0.1.4-gpg-test --json | \
+            jq -e '.signature_type == "gpg" and .is_valid == true'
+
+      - name: "Test GPG signature detection without key (SemVer)"
+        if: steps.check-gpg-key.outputs.gpg_available == 'false'
+        shell: bash
+        run: |
+          # Without GPG key, signature should be detected but not verified
+          # Note: detect exits with code 1 when unverified
+          cd test-repo-semver
+          result=$(tag-validate detect v0.1.4-gpg-test --json \
+            2>&1 || true)
+          echo "DEBUG: Full JSON output:"
+          echo "$result"
+
+          # Check that signature was detected (either gpg or gpg-unverifiable)
+          sig_type=$(echo "$result" | jq -r '.signature_type // "unknown"')
+          is_valid=$(echo "$result" | jq -r '.is_valid // false')
+
+          echo "Signature type: $sig_type"
+          echo "Is valid: $is_valid"
+
+          if [[ "$sig_type" == "gpg-unverifiable" ]] || \
+             [[ "$sig_type" == "gpg" ]]; then
+            echo "✓ GPG signature detected (type: $sig_type)"
+          else
+            echo "❌ Expected GPG signature, got: $sig_type"
+            exit 1
+          fi
+
+          if [[ "$is_valid" == "false" ]]; then
+            echo "✓ Signature is not verified (as expected without key)"
+          else
+            echo "⚠️  Signature verification status: $is_valid"
+          fi
+
+      - name: "Test SSH signature detection (SemVer)"
+        shell: bash
+        run: |
+          # Test SSH signature detection
+          # Note: SSH signatures may not be verified without allowed_signers
+          cd test-repo-semver
+          result=$(tag-validate detect v0.1.3-ssh-signed --json \
+            || true)
+          echo "$result" | jq -e '.signature_type == "ssh"'
+          echo "✓ SSH signature detected"
+
+      - name: "Test unsigned tag detection (SemVer)"
+        shell: bash
+        run: |
+          # Test unsigned tag detection
+          cd test-repo-semver
+          tag-validate detect v0.1.2-unsigned --json | \
+            jq -e '.signature_type == "unsigned"'
+
+      - name: "Test GPG signature detection (CalVer)"
+        if: steps.check-gpg-key.outputs.gpg_available == 'true'
+        shell: bash
+        run: |
+          # Test GPG signature detection with key available
+          cd test-repo-calver
+          tag-validate detect 2025.1.4-gpg-test --json | \
+            jq -e '.signature_type == "gpg" and .is_valid == true'
+
+      - name: "Test GPG signature detection without key (CalVer)"
+        if: steps.check-gpg-key.outputs.gpg_available == 'false'
+        shell: bash
+        run: |
+          # Without GPG key, signature should be detected but not verified
+          # Note: detect exits with code 1 when unverified
+          cd test-repo-calver
+          result=$(tag-validate detect 2025.1.4-gpg-test --json \
+            2>&1 || true)
+          echo "DEBUG: Full JSON output:"
+          echo "$result"
+
+          # Check that signature was detected (either gpg or gpg-unverifiable)
+          sig_type=$(echo "$result" | jq -r '.signature_type // "unknown"')
+          is_valid=$(echo "$result" | jq -r '.is_valid // false')
+
+          echo "Signature type: $sig_type"
+          echo "Is valid: $is_valid"
+
+          if [[ "$sig_type" == "gpg-unverifiable" ]] || \
+             [[ "$sig_type" == "gpg" ]]; then
+            echo "✓ GPG signature detected (type: $sig_type)"
+          else
+            echo "❌ Expected GPG signature, got: $sig_type"
+            exit 1
+          fi
+
+          if [[ "$is_valid" == "false" ]]; then
+            echo "✓ Signature is not verified (as expected without key)"
+          else
+            echo "⚠️  Signature verification status: $is_valid"
+          fi
+
+      - name: "Test SSH signature detection (CalVer)"
+        shell: bash
+        run: |
+          # Test SSH signature detection
+          # Note: SSH signatures may not be verified without allowed_signers
+          cd test-repo-calver
+          result=$(tag-validate detect 2025.1.3-ssh-signed --json \
+            || true)
+          echo "$result" | jq -e '.signature_type == "ssh"'
+          echo "✓ SSH signature detected"
+
+      - name: "Test unsigned tag detection (CalVer)"
+        shell: bash
+        run: |
+          # Test unsigned tag detection
+          cd test-repo-calver
+          tag-validate detect 2025.1.2-unsigned --json | \
+            jq -e '.signature_type == "unsigned"'
+
+      - name: "Test summary"
+        if: always()
+        shell: bash
+        run: |
+          echo "=== Python Signature Detection Test Summary ==="
+          if [ "${{ steps.check-gpg-key.outputs.gpg_available }}" = \
+            "true" ]; then
+            echo "✓ GPG key available - Full verification tests completed"
+          else
+            echo "ℹ️  GPG key not available (PR from fork)"
+            echo "✓ Signature detection tests completed" \
+              "(without verification)"
+            echo ""
+            echo "This is expected behavior for pull requests" \
+              "from forks."
+            echo "GPG signatures are detected but not verified" \
+              "without the key."
+          fi
+
+  test-python-tag-operations:
+    name: "Test Python Tag Operations"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: "Install package with dev dependencies"
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: "Test tag location parsing"
+        shell: bash
+        run: |
+          # Test tag location parsing with Python
+          python -c "
+          from tag_validate.tag_operations import TagOperations
+
+          ops = TagOperations()
+
+          # Test basic format
+          owner, repo, tag = ops.parse_tag_location('torvalds/linux@v6.0')
+          assert owner == 'torvalds', f'Expected torvalds, got {owner}'
+          assert repo == 'linux', f'Expected linux, got {repo}'
+          assert tag == 'v6.0', f'Expected v6.0, got {tag}'
+
+          # Test with HTTPS URL
+          url = 'https://github.com/torvalds/linux@v6.0'
+          owner, repo, tag = ops.parse_tag_location(url)
+          assert owner == 'torvalds', f'Expected torvalds, got {owner}'
+          assert repo == 'linux', f'Expected linux, got {repo}'
+
+          # Test with .git suffix
+          url = 'https://github.com/user/repo.git@v1.0.0'
+          owner, repo, tag = ops.parse_tag_location(url)
+          assert owner == 'user', f'Expected user, got {owner}'
+          assert repo == 'repo', f'Expected repo, got {repo}'
+
+          print('✅ Tag location parsing tests passed')
+          "
+
+      - name: "Test repository info builder"
+        shell: bash
+        run: |
+          # Test repository info builder
+          python -c "
+          from tag_validate.tag_operations import TagOperations
+
+          ops = TagOperations()
+          repo_info = ops.build_repository_info('torvalds', 'linux', 'v6.0')
+
+          assert repo_info.owner == 'torvalds'
+          assert repo_info.name == 'linux'
+          assert repo_info.tag == 'v6.0'
+          assert 'github.com/torvalds/linux' in repo_info.clone_url
+
+          print('✅ Repository info builder tests passed')
+          "
+
   test-summary:
-    name: "Test Summary"
+    name: "Test Results Summary"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
@@ -840,10 +1316,14 @@ jobs:
       - test-local-tags
       - test-remote-tags
       - test-signatures
+      - test-local-ssh-tags
       - test-signature-requirements
       - test-development-tags
       - test-input-priority
       - test-edge-cases
+      - test-python-validation
+      - test-python-signature-detection
+      - test-python-tag-operations
     if: always()
     steps:
       - name: "Display test results"
@@ -854,6 +1334,7 @@ jobs:
             echo ""
             echo "All test jobs completed!"
             echo ""
+            echo "### Bash Action Tests"
             echo "✅ String validation tests"
             echo "✅ Local tag tests"
             echo "✅ Remote tag tests"
@@ -861,4 +1342,9 @@ jobs:
             echo "✅ Development tag tests"
             echo "✅ Input priority tests"
             echo "✅ Edge case tests"
+            echo ""
+            echo "### Python Package Tests"
+            echo "✅ Python version validation tests"
+            echo "✅ Python signature detection tests"
+            echo "✅ Python tag operations tests"
           } >> "$GITHUB_STEP_SUMMARY"

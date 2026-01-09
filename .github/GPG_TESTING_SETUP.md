@@ -275,13 +275,13 @@ For comprehensive testing:
 
 <!-- markdownlint-disable MD013 MD060 -->
 
-| Test Case         | GPG Key Available | Expected Result    | Purpose                                |
-| ----------------- | ----------------- | ------------------ | -------------------------------------- |
-| GPG-signed tag    | ✅ Yes            | `gpg`              | Verify signature validation works      |
-| GPG-signed tag | ❌ No | `gpg-unverifiable` | Detect w/o key |
-| SSH-signed tag    | N/A               | `ssh`              | Verify SSH signature detection         |
-| Unsigned tag      | N/A               | `unsigned`         | Verify unsigned tag detection          |
-| Invalid signature | ✅ Yes            | `invalid`          | Verify bad signature detection         |
+| Test Case         | GPG Key Available | Expected Result    | Purpose                           |
+| ----------------- | ----------------- | ------------------ | --------------------------------- |
+| GPG-signed tag    | ✅ Yes            | `gpg`              | Verify signature validation works |
+| GPG-signed tag    | ❌ No             | `gpg-unverifiable` | Detect w/o key                    |
+| SSH-signed tag    | N/A               | `ssh`              | Verify SSH signature detection    |
+| Unsigned tag      | N/A               | `unsigned`         | Verify unsigned tag detection     |
+| Invalid signature | ✅ Yes            | `invalid`          | Verify bad signature detection    |
 
 <!-- markdownlint-enable MD013 MD060 -->
 

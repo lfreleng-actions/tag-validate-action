@@ -661,6 +661,45 @@ signature requirements.
 
 Apache-2.0
 
+## Local Testing
+
+You can test the action locally using [Nektos/Act](https://nektosact.com/)
+before pushing to GitHub:
+
+```bash
+# Setup (one time)
+make install-act
+make setup-secrets
+
+# Run quick smoke test
+make test-quick
+
+# Run specific test suites
+make test-basic
+make test-local-tags
+make test-signatures
+make test-python
+
+# Run all tests
+make test-all
+```
+
+**Benefits:**
+
+- ✅ Fast feedback loop (no waiting for CI)
+- ✅ No GitHub Actions minutes consumed
+- ✅ Easy debugging with direct container access
+- ✅ Test before pushing commits
+
+See [docs/LOCAL_TESTING.md](docs/LOCAL_TESTING.md) for detailed setup and
+usage instructions.
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or pull request.
+
+Before submitting a PR, please:
+
+1. Test locally with `make test-all`
+2. Run pre-commit hooks: `pre-commit run --all-files`
+3. Ensure all tests pass
