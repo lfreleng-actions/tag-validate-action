@@ -69,7 +69,12 @@ repos:
     hooks:
       - id: write-good
         files: "\\.(rst|md|markdown|mdown|mkdn)$"
-        exclude: ^\.github/(gpg-export/|GPG_TESTING_SETUP\.md)
+        exclude: |
+          (?x)^(
+            \.github/(gpg-export/|GPG_TESTING_SETUP\.md)|
+            README_PYTHON\.md|
+            tests/integration/README\.md
+          )
         args: ['--no-passive']
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
