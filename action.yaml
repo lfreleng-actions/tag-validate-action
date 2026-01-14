@@ -28,9 +28,23 @@ inputs:
     required: false
     default: 'none'
   require_signed:
-    description: 'Signature requirement (true|ssh|gpg|false|ambivalent)'
+    description: >-
+      Signature requirement:
+      - true: Require ANY verified signature (gpg or ssh)
+      - gpg: Require verified GPG signature
+      - ssh: Require verified SSH signature
+      - gpg-unverifiable: Require GPG signature (verification optional)
+      - signed: Require any signature type (including unverifiable)
+      - false: Must be unsigned
+      - ambivalent: Don't care (default)
     required: false
     default: 'ambivalent'
+  verify_github:
+    description: >-
+      Verify that the signing key is registered on the GitHub account
+      of the tag creator. Requires a GitHub token.
+    required: false
+    default: 'false'
   permit_missing:
     description: 'Allow missing tags without error'
     required: false
@@ -49,6 +63,12 @@ inputs:
     default: ''
   debug:
     description: 'Enable debug output in action logs'
+    required: false
+    default: 'false'
+  use_local_action:
+    description: >-
+      Use local repository action/code instead of the PyPI package.
+      Set to 'true' when testing changes in a fork or branch before merging.
     required: false
     default: 'false'
 
@@ -77,20 +97,219 @@ runs:
   using: 'composite'
   steps:
     # yamllint disable rule:line-length
+    - name: 'Set up Python'
+      uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+      with:
+        python-version: '3.12'
+
+    - name: 'Install uv'
+      if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
+      uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+
+    - name: 'Install local dependencies'
+      if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
+      shell: bash
+      run: |
+        pip install -e "${{ github.action_path }}"
+
     - name: 'Validate tag'
       id: validate
       shell: bash
       run: |
-        # Call external validation script
-        "${{ github.action_path }}/validate-tag.sh" \
-          "${{ inputs.tag_location }}" \
-          "${{ inputs.tag_string }}" \
-          "${{ inputs.require_type }}" \
-          "${{ inputs.require_signed }}" \
-          "${{ inputs.permit_missing }}" \
-          "${GITHUB_SERVER_URL_INPUT}" \
-          "${{ inputs.debug }}" \
-          "${{ github.repository }}"
+        # Run tag-validate Python CLI with JSON output
+        set -euo pipefail
+
+        # Normalize inputs to lowercase for case-insensitive matching
+        REQUIRE_TYPE=$(echo "${{ inputs.require_type }}" | tr '[:upper:]' '[:lower:]')
+        REQUIRE_SIGNED=$(echo "${{ inputs.require_signed }}" | tr '[:upper:]' '[:lower:]')
+        VERIFY_GITHUB=$(echo "${{ inputs.verify_github }}" | tr '[:upper:]' '[:lower:]')
+        PERMIT_MISSING=$(echo "${{ inputs.permit_missing }}" | tr '[:upper:]' '[:lower:]')
+        DEBUG=$(echo "${{ inputs.debug }}" | tr '[:upper:]' '[:lower:]')
+
+        # Build command arguments
+        ARGS=("--json")
+        USE_VERSION_ONLY="false"
+
+        # Determine tag location or string
+        if [ -n "${{ inputs.tag_location }}" ]; then
+          TAG_LOCATION="${{ inputs.tag_location }}"
+          # Python CLI now handles format normalization (owner/repo/tag → owner/repo@tag)
+        elif [ -n "${{ inputs.tag_string }}" ]; then
+          # For tag_string, use validate-version command
+          USE_VERSION_ONLY="true"
+          TAG_LOCATION="${{ inputs.tag_string }}"
+        elif [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+          # Auto-detect from tag push event
+          TAG_LOCATION="${GITHUB_REF_NAME:-}"
+          echo "🏷️ Tag push event detected: ${TAG_LOCATION}"
+        elif [ "${PERMIT_MISSING}" = "true" ]; then
+          # Handle missing tag with permit_missing=true
+          echo "ℹ️ No tag found, but permit_missing=true"
+          # Write minimal outputs and exit successfully
+          cat >> "${GITHUB_OUTPUT}" << 'EOFOUTPUT'
+        valid=true
+        tag_type=unknown
+        signing_type=unsigned
+        development_tag=false
+        version_prefix=false
+        tag_name=
+        EOFOUTPUT
+          exit 0
+        else
+          echo "Error: Either tag_location or tag_string must be provided" >&2
+          exit 1
+        fi
+
+        # Add validation options
+        # Common args for both validate and verify commands
+        COMMON_ARGS=()
+
+        # Add --require-type if it's not empty (including "none")
+        if [ -n "${REQUIRE_TYPE}" ]; then
+          COMMON_ARGS+=("--require-type" "${REQUIRE_TYPE}")
+        fi
+
+        # Signature-specific args only for verify command
+        VERIFY_ARGS=()
+
+        # Handle require_signed variations
+        # Values: true, gpg, ssh, gpg-unverifiable, signed, false, ambivalent
+        case "${REQUIRE_SIGNED}" in
+          true)
+            # Require any verified signature (gpg or ssh)
+            VERIFY_ARGS+=("--require-signed" "true")
+            ;;
+          gpg|ssh)
+            # Require specific signature type (verified)
+            VERIFY_ARGS+=("--require-signed" "${REQUIRE_SIGNED}")
+            ;;
+          gpg-unverifiable)
+            # Require GPG signature but don't enforce verification
+            VERIFY_ARGS+=("--require-signed" "gpg-unverifiable")
+            ;;
+          signed)
+            # Require any signature (including unverifiable)
+            VERIFY_ARGS+=("--require-signed" "signed")
+            ;;
+          false)
+            # Explicitly require unsigned
+            VERIFY_ARGS+=("--require-signed" "false")
+            ;;
+          ambivalent)
+            # Don't add --require-signed flag (don't care)
+            ;;
+        esac
+
+        # Add GitHub key verification if requested
+        if [ "${VERIFY_GITHUB}" = "true" ]; then
+          VERIFY_ARGS+=("--verify-github-key")
+        fi
+
+        # Add owner if provided
+        if [ -n "${{ inputs.owner }}" ]; then
+          VERIFY_ARGS+=("--owner" "${{ inputs.owner }}")
+        fi
+
+        # Add permit_missing flag if enabled (applies to both)
+        if [ "${PERMIT_MISSING}" = "true" ]; then
+          COMMON_ARGS+=("--permit-missing")
+        fi
+
+        # Add GitHub token if provided (applies to both for remote tags)
+        if [ -n "${{ inputs.token }}" ]; then
+          COMMON_ARGS+=("--token" "${{ inputs.token }}")
+        fi
+
+        # Enable debug output
+        if [ "${DEBUG}" = "true" ]; then
+          set -x
+        fi
+
+        # Determine which CLI invocation method to use
+        if [[ "${{ inputs.use_local_action }}" == "true" ]] || \
+           [[ "${{ github.repository }}" =~ lfreleng-actions/tag-validate-action ]]; then
+          CLI_CMD="python -m tag_validate.cli"
+          echo "Using local action code: ${CLI_CMD}"
+        else
+          CLI_CMD="uvx --from tag-validate tag-validate"
+          echo "Using PyPI package via uvx: ${CLI_CMD}"
+        fi
+
+        # Execute validation and capture output
+        EXIT_CODE=0
+        if [ "${USE_VERSION_ONLY}" = "true" ]; then
+          # validate command only uses common args (no signature args)
+          JSON_OUTPUT=$(${CLI_CMD} validate "${TAG_LOCATION}" "${COMMON_ARGS[@]}" --json 2>&1) || EXIT_CODE=$?
+        else
+          # verify command uses both common and verify-specific args
+          ALL_VERIFY_ARGS=("${COMMON_ARGS[@]}" "${VERIFY_ARGS[@]}")
+          JSON_OUTPUT=$(${CLI_CMD} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" --json 2>&1) || EXIT_CODE=$?
+        fi
+
+        # Display output
+        echo "${JSON_OUTPUT}"
+
+        # Python CLI now handles permit_missing logic internally
+        # If exit code is 0, validation succeeded (or was permitted to pass)
+        # If exit code is non-zero, validation failed
+
+        # Parse JSON output using Python (bundled with actions/setup-python)
+        # Create temporary Python script to avoid YAML parsing issues
+        cat > /tmp/parse_output.py << 'PYEOF'
+        import json
+        import sys
+        import os
+        import re
+
+        json_output = sys.argv[1]
+
+        try:
+            data = json.loads(json_output)
+            success = str(data.get("success", False)).lower()
+            tag_name = data.get("tag_name", data.get("version", ""))
+            version_type = data.get("version_type", data.get("detected_type", "unknown")) or "unknown"
+            signature_type = data.get("signature_type", "unsigned") or "unsigned"
+
+            # Determine development tag
+            # Support both new (development_tag) and old (is_development) field names for backwards compatibility
+            is_dev = "false"
+            if data.get("development_tag", False) or data.get("is_development", False):
+                is_dev = "true"
+            # Fallback: check tag name for development indicators (for backwards compatibility)
+            elif tag_name and re.search(r"(dev|pre|alpha|beta|rc|snapshot|nightly|canary|preview)", tag_name.lower()):
+                is_dev = "true"
+
+            # Determine version prefix
+            # Support both new (version_prefix) and old (has_prefix) field names for backwards compatibility
+            has_prefix = "false"
+            if data.get("version_prefix", False) or data.get("has_prefix", False):
+                has_prefix = "true"
+            # Fallback: check tag name directly (for backwards compatibility)
+            elif tag_name and tag_name[0:1] in ("v", "V"):
+                has_prefix = "true"
+
+            # Write to GITHUB_OUTPUT in single block
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write(f"valid={success}\n")
+                f.write(f"tag_type={version_type}\n")
+                f.write(f"signing_type={signature_type}\n")
+                f.write(f"development_tag={is_dev}\n")
+                f.write(f"version_prefix={has_prefix}\n")
+                f.write(f"tag_name={tag_name}\n")
+
+            # Exit with appropriate code
+            sys.exit(0 if success == "true" else 1)
+
+        except Exception as e:
+            print(f"Error parsing JSON output: {e}", file=sys.stderr)
+            print(f"JSON output was: {json_output}", file=sys.stderr)
+            sys.exit(1)
+        PYEOF
+
+        # Execute the Python script with JSON output as argument
+        python /tmp/parse_output.py "${JSON_OUTPUT}"
+
+        # Exit code is already set by Python script above
       env:
-        VALIDATION_TOKEN: ${{ inputs.token }}
-        GITHUB_SERVER_URL_INPUT: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GITHUB_SERVER_URL: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}

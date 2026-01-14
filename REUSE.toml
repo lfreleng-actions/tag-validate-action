@@ -7,8 +7,9 @@ version = 1
 
 [[annotations]]
 path = [
-         ".github/gpg-export/**"
-
+     ".github/gpg-export/gpg-public-key.asc",
+     ".ssh-allowed-signers",
+     "src/tag_validate/_version.py"
 ]
 SPDX-License-Identifier = "Apache-2.0"
 SPDX-FileCopyrightText = "2025 The Linux Foundation"

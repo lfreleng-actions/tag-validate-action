@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Nektos/Act configuration for tag-validate-action
+# https://nektosact.com/
+
+# Use GitHub Actions compatible runner image
+# Use 'act-latest' for smaller/faster, 'full-latest' for full compatibility
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# Bind the workspace to allow proper git operations
+--bind
+
+# Use .secrets file for secrets (create this file locally if needed)
+--secret-file .secrets
+
+# Container architecture (use host architecture)
+--container-architecture linux/amd64
+
+# Docker socket location
+# macOS: Set DOCKER_HOST=unix://$HOME/.docker/run/docker.sock before running act
+# Linux: Uses /var/run/docker.sock by default
+# --container-daemon-socket can be set here if needed
+
+# Reuse containers for faster runs
+--reuse
+
+# Environment variables for local testing
+--env CI=true
+--env GITHUB_ACTIONS=true
+
+# Verbose output for debugging
+# --verbose

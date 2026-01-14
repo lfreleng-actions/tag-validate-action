@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Mark generated file as generated (excludes from diffs and Copilot review)
+src/tag_validate/_version.py linguist-generated=true

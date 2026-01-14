@@ -1,0 +1,712 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Comprehensive test workflow for local testing with Nektos/Act
+# This workflow includes ALL tests from testing.yaml in a single job
+name: "Test GitHub Action (Act) 🧪"
+
+# NOTE: This workflow is designed for local testing with Nektos/Act
+# It only runs on manual dispatch to avoid duplicating testing.yaml in CI
+'on':
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ### ALL TESTS IN ONE JOB ###
+  test-all:
+    name: "All Tests"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: "Install Python package"
+        shell: bash
+        run: |
+          python3 --version
+          pip --version
+          pip install --break-system-packages --ignore-installed -e .
+
+      # ====================================================================
+      # STRING VALIDATION TESTS
+      # ====================================================================
+
+      - name: "Test SemVer string - valid"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.2.3" --json)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "semver" ]; then
+            echo "Error: Expected version_type=semver"
+            exit 1
+          fi
+          echo "✓ SemVer validation passed"
+
+      - name: "Test SemVer with v prefix"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "v2.3.1-beta.1" --json)
+          has_prefix=$(echo "$output" | jq -r '.has_prefix')
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$has_prefix" != "true" ] || [ "$is_dev" != "true" ]; then
+            echo "Error: Prefix or development tag not detected"
+            exit 1
+          fi
+          echo "✓ Prefix and development tag detected"
+
+      - name: "Test CalVer string - valid"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "2025.01.15" --json)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "calver" ]; then
+            echo "Error: Expected version_type=calver"
+            exit 1
+          fi
+          echo "✓ CalVer validation passed"
+
+      - name: "Test CalVer with development identifier"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "v2025.1.0-alpha.1" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Development tag not detected"
+            exit 1
+          fi
+          echo "✓ CalVer development tag detected"
+
+      - name: "Test type mismatch - should fail"
+        shell: bash
+        run: |
+          if tag-validate validate "1.2.3" --require-type calver \
+            --json 2>/dev/null; then
+            echo "Error: Type mismatch should fail"
+            exit 1
+          fi
+          echo "✓ Type mismatch correctly rejected"
+
+      - name: "Test unknown format with require_type=none"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "random-tag-name" \
+            --json || true)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "unknown" ]; then
+            echo "Error: Expected version_type=unknown"
+            exit 1
+          fi
+          echo "✓ Unknown format detected"
+
+      # ==================================================================
+      # DEVELOPMENT TAG TESTS
+      # ====================================================================
+
+      - name: "Test alpha tag"
+        shell: bash
+        run: |
+          output=$(tag-validate validate \
+            "1.0.0-alpha.1" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Alpha not detected as development"
+            exit 1
+          fi
+          echo "✓ Alpha tag detected"
+
+      - name: "Test beta tag"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "v2.0.0-beta" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Beta not detected as development"
+            exit 1
+          fi
+          echo "✓ Beta tag detected"
+
+      - name: "Test rc tag"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-rc.1" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: RC not detected as development"
+            exit 1
+          fi
+          echo "✓ RC tag detected"
+
+      - name: "Test dev tag"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-dev" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Dev not detected as development"
+            exit 1
+          fi
+          echo "✓ Dev tag detected"
+
+      - name: "Test snapshot tag"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-SNAPSHOT" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: SNAPSHOT not detected as development"
+            exit 1
+          fi
+          echo "✓ Snapshot tag detected"
+
+      - name: "Test stable tag (not development)"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "false" ]; then
+            echo "Error: Stable tag incorrectly flagged as development"
+            exit 1
+          fi
+          echo "✓ Stable tag correctly identified"
+
+      # ====================================================================
+      # EDGE CASE TESTS
+      # ====================================================================
+
+      - name: "Test empty string"
+        shell: bash
+        run: |
+          if tag-validate validate "" --json 2>/dev/null; then
+            echo "Error: Empty string should fail"
+            exit 1
+          fi
+          echo "✓ Empty string correctly rejected"
+
+      - name: "Test long version string"
+        shell: bash
+        run: |
+          output=$(tag-validate validate \
+            "1.0.0-beta.1+build.12345.abcdef1234567890" --json)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "semver" ]; then
+            echo "Error: Long version not recognized as SemVer"
+            exit 1
+          fi
+          echo "✓ Long version string handled"
+
+      - name: "Test multiple dev keywords"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-alpha-pre-dev" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Multiple dev keywords not detected"
+            exit 1
+          fi
+          echo "✓ Multiple dev keywords detected"
+
+      - name: "Test strict SemVer mode"
+        shell: bash
+        run: |
+          # Strict mode should reject prefix
+          if tag-validate validate "v1.2.3" --strict-semver \
+            --json 2>/dev/null; then
+            echo "Error: Strict mode should reject 'v' prefix"
+            exit 1
+          fi
+
+          # Strict mode should accept without prefix
+          output=$(tag-validate validate "1.2.3" --strict-semver --json)
+          success=$(echo "$output" | jq -r '.success')
+          if [ "$success" != "true" ]; then
+            echo "Error: Strict mode should accept clean version"
+            exit 1
+          fi
+          echo "✓ Strict SemVer mode works"
+
+      # ====================================================================
+      # LOCAL TAG TESTS
+      # ====================================================================
+
+      - name: "Create test tags locally"
+        shell: bash
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+          # Delete any existing test tags first
+          git tag -d test-semver-1.0.0 test-calver-2025.01.0 \
+            test-dev-1.0.0-beta 2>/dev/null || true
+
+          # Create unsigned tags (matching testing.yaml)
+          git tag -a test-semver-1.0.0 -m "Test SemVer tag"
+          git tag -a test-calver-2025.01.0 -m "Test CalVer tag"
+          git tag -a test-dev-1.0.0-beta -m "Test dev tag"
+
+          git tag -l
+          echo "✓ Test tags created"
+
+      - name: "Test validation with explicit tag_string"
+        shell: bash
+        run: |
+          # Call action script directly (uses: ./ with tag_string)
+          # Parameters: tag_location tag_string require_type
+          #   require_signed permit_missing github_server_url debug
+          #   github_repository
+          if ! ./validate-tag.sh "" "test-semver-1.0.0" "none" \
+            "ambivalent" "false" "" "false" "" > /dev/null; then
+            echo "Error: Tag string validation failed"
+            exit 1
+          fi
+          echo "✓ Tag string validation with explicit tag_string passed"
+
+      - name: "Test missing tag with permit_missing=true"
+        shell: bash
+        run: |
+          # Call action script with permit_missing=true (no tag exists)
+          # Parameters: tag_location tag_string require_type
+          #   require_signed permit_missing github_server_url debug
+          #   github_repository
+          if ! ./validate-tag.sh "" "" "none" "ambivalent" "true" "" \
+            "false" "" > /dev/null; then
+            echo "Error: Should succeed with permit_missing=true"
+            exit 1
+          fi
+          echo "✓ permit_missing=true works correctly"
+
+      - name: "Test missing tag with permit_missing=false - should fail"
+        shell: bash
+        run: |
+          # This should fail because no tag exists and
+          #   permit_missing=false
+          # Parameters: tag_location tag_string require_type
+          #   require_signed permit_missing github_server_url debug
+          #   github_repository
+          if ./validate-tag.sh "" "" "none" "ambivalent" "false" "" \
+            "false" "" >/dev/null 2>&1; then
+            echo "Error: Should have failed without permit_missing"
+            exit 1
+          fi
+          echo "✓ Missing tag correctly rejected with permit_missing=false"
+
+      # ==================================================================
+      # SSH SIGNATURE TESTS (using existing repository SSH-signed tags)
+      # ==================================================================
+
+      - name: "Setup SSH allowed signers file"
+        shell: bash
+        run: |
+          # Use the committed .ssh-allowed-signers file from the repository
+          git config gpg.ssh.allowedSignersFile .ssh-allowed-signers
+          echo "✓ SSH allowed signers file configured"
+
+      - name: "Verify SSH signature on v0.1.0"
+        shell: bash
+        run: |
+          git verify-tag v0.1.0
+          echo "✓ v0.1.0 SSH signature verified by git"
+
+      - name: "Test v0.1.0 with Python CLI (SSH-signed)"
+        shell: bash
+        run: |
+          tag-validate verify v0.1.0 --require-type semver \
+            --require-signed true --json > result.json
+
+          # Check success
+          if [ "$(jq -r '.success' result.json)" != "true" ]; then
+            echo "Error: Validation failed"
+            jq '.' result.json
+            exit 1
+          fi
+
+          # Check signature type
+          if [ "$(jq -r '.signature_type' result.json)" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+
+          # Check signature verified
+          if [ "$(jq -r '.signature_verified' result.json)" != "true" ]; then
+            echo "Error: Expected signature_verified=true"
+            exit 1
+          fi
+
+          echo "✓ v0.1.0 validated correctly as SSH-signed SemVer"
+
+      - name: "Test v0.1.1 with Python CLI (SSH-signed)"
+        shell: bash
+        run: |
+          tag-validate verify v0.1.1 --require-type semver \
+            --require-signed true --json > result.json
+
+          # Check success
+          if [ "$(jq -r '.success' result.json)" != "true" ]; then
+            echo "Error: Validation failed"
+            jq '.' result.json
+            exit 1
+          fi
+
+          # Check signature type
+          if [ "$(jq -r '.signature_type' result.json)" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+
+          # Check signature verified
+          if [ "$(jq -r '.signature_verified' result.json)" != "true" ]; then
+            echo "Error: Expected signature_verified=true"
+            exit 1
+          fi
+
+          echo "✓ v0.1.1 validated correctly as SSH-signed SemVer"
+
+      # ==================================================================
+      # REMOTE TAG TESTS
+      # ==================================================================
+
+      - name: "Test remote SemVer tag"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          output=$(tag-validate verify \
+            lfreleng-actions/test-tags-semantic@v0.1.4-gpg-test \
+            --json || true)
+          echo "$output"
+          echo "✓ Remote SemVer tag query completed"
+
+      - name: "Test remote CalVer tag"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          output=$(tag-validate verify \
+            lfreleng-actions/test-tags-calver@2025.1.4-gpg-test \
+            --json || true)
+          echo "$output"
+          echo "✓ Remote CalVer tag query completed"
+
+      - name: "Test invalid location format"
+        shell: bash
+        run: |
+          if tag-validate verify "invalid/format" --json 2>/dev/null; then
+            echo "Error: Invalid format should fail"
+            exit 1
+          fi
+          echo "✓ Invalid location correctly rejected"
+
+      - name: "Test non-existent remote tag"
+        shell: bash
+        run: |
+          if tag-validate verify \
+            lfreleng-actions/test-tags-semantic@nonexistent-tag-999 \
+            --json 2>/dev/null; then
+            echo "Error: Non-existent tag should fail"
+            exit 1
+          fi
+          echo "✓ Non-existent tag correctly rejected"
+
+      # ====================================================================
+      # SIGNATURE DETECTION TESTS (external repos)
+      # ====================================================================
+
+      - name: "Checkout test repo - SemVer"
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: lfreleng-actions/test-tags-semantic
+          fetch-depth: 0
+          path: test-repo-semver
+
+      - name: "Checkout test repo - CalVer"
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: lfreleng-actions/test-tags-calver
+          fetch-depth: 0
+          path: test-repo-calver
+
+      - name: "Test GPG-signed SemVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-semver
+          output=$(tag-validate verify v0.1.4-gpg-test \
+            --json)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "gpg" ] && \
+            [ "$sig_type" != "gpg-unverifiable" ]; then
+            echo "Error: Expected gpg or gpg-unverifiable, got $sig_type"
+            exit 1
+          fi
+          echo "✓ GPG signature detected (type: $sig_type)"
+
+      - name: "Test SSH-signed SemVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-semver
+          output=$(tag-validate verify v0.1.3-ssh-signed --json)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+          echo "✓ SSH signature detected"
+
+      - name: "Test unsigned SemVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-semver
+          tag-validate detect v0.1.2-unsigned --json | \
+            jq -e '.signature_type == "unsigned"'
+          echo "✓ Unsigned tag detected"
+
+      - name: "Test GPG-signed CalVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-calver
+          output=$(tag-validate verify 2025.1.4-gpg-test --json)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "gpg" ] && \
+            [ "$sig_type" != "gpg-unverifiable" ]; then
+            echo "Error: Expected gpg or gpg-unverifiable"
+            exit 1
+          fi
+          echo "✓ GPG CalVer signature detected (type: $sig_type)"
+
+      - name: "Test SSH-signed CalVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-calver
+          output=$(tag-validate verify 2025.1.3-ssh-signed --json)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "ssh" ]; then
+            echo "Error: Expected signature_type=ssh"
+            exit 1
+          fi
+          echo "✓ SSH CalVer signature detected"
+
+      - name: "Test unsigned CalVer tag detection"
+        shell: bash
+        run: |
+          cd test-repo-calver
+          tag-validate detect 2025.1.2-unsigned --json | \
+            jq -e '.signature_type == "unsigned"'
+          echo "✓ Unsigned CalVer tag detected"
+
+      - name: "Test GPG unverifiable SemVer detection"
+        shell: bash
+        run: |
+          cd test-repo-semver
+          git fetch --tags
+          git tag -l | grep gpg-unknown || echo "Tag not found!"
+          # This tag is signed with a key not in any keyring
+          # Possible states:
+          #   - "invalid": Key completely unknown/unavailable
+          #   - "gpg-unverifiable": Signature detected but cannot verify
+          output=$(tag-validate detect \
+            v0.1.6-gpg-unknown --json || true)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "invalid" ] && \
+            [ "$sig_type" != "gpg-unverifiable" ]; then
+            echo "Error: Expected invalid or gpg-unverifiable"
+            echo "Got: $sig_type"
+            exit 1
+          fi
+          echo "✓ GPG signature detected (type: $sig_type)"
+
+      - name: "Test GPG unverifiable CalVer detection"
+        shell: bash
+        run: |
+          cd test-repo-calver
+          git fetch --tags
+          git tag -l | grep gpg-unknown || echo "Tag not found!"
+          # This tag is signed with a key not in any keyring
+          # Possible states:
+          #   - "invalid": Key completely unknown/unavailable
+          #   - "gpg-unverifiable": Signature detected but cannot verify
+          output=$(tag-validate detect \
+            2025.1.6-gpg-unknown --json || true)
+          sig_type=$(echo "$output" | jq -r '.signature_type')
+          if [ "$sig_type" != "invalid" ] && \
+            [ "$sig_type" != "gpg-unverifiable" ]; then
+            echo "Error: Expected invalid or gpg-unverifiable"
+            echo "Got: $sig_type"
+            exit 1
+          fi
+          echo "✓ GPG signature detected (type: $sig_type)"
+
+      # ====================================================================
+      # PYTHON CLI COMPREHENSIVE TESTS
+      # ====================================================================
+
+      - name: "Test CLI help"
+        shell: bash
+        run: |
+          tag-validate --help >/dev/null
+          echo "✓ CLI help works"
+
+      - name: "Test CLI version"
+        shell: bash
+        run: |
+          tag-validate --version || tag-validate -v
+          echo "✓ CLI version works"
+
+      - name: "Test CLI SemVer validation"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.2.3" --json)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "semver" ]; then
+            echo "Error: Expected version_type=semver"
+            exit 1
+          fi
+          echo "✓ CLI SemVer validation works"
+
+      - name: "Test CLI CalVer validation"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "2025.1.15" --json)
+          version_type=$(echo "$output" | jq -r '.version_type')
+          if [ "$version_type" != "calver" ]; then
+            echo "Error: Expected version_type=calver"
+            exit 1
+          fi
+          echo "✓ CLI CalVer validation works"
+
+      - name: "Test CLI development tag detection"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-alpha.1" --json)
+          is_dev=$(echo "$output" | jq -r '.is_development')
+          if [ "$is_dev" != "true" ]; then
+            echo "Error: Expected is_development=true"
+            exit 1
+          fi
+          echo "✓ CLI development tag detection works"
+
+      - name: "Test CLI type validation failure"
+        shell: bash
+        run: |
+          if tag-validate validate "1.2.3" --require-type calver \
+            --json 2>/dev/null; then
+            echo "Error: Type mismatch should fail"
+            exit 1
+          fi
+          echo "✓ CLI type validation works"
+
+      - name: "Test JSON output structure"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0" --json)
+
+          # Validate JSON structure
+          echo "$output" | jq . > /dev/null
+
+          # Check required fields
+          version_type=$(echo "$output" | jq -r '.version_type')
+          success=$(echo "$output" | \
+            jq -r '.success')
+
+          if [ -z "$version_type" ] || [ -z "$success" ]; then
+            echo "Error: Missing required fields in JSON output"
+            exit 1
+          fi
+
+          echo "✓ JSON output structure valid"
+
+      - name: "Test CLI error handling"
+        shell: bash
+        run: |
+          if tag-validate validate "not-a-version" \
+            --require-type semver --json 2>/dev/null; then
+            echo "Error: Invalid tag should fail"
+            exit 1
+          fi
+          echo "✓ CLI error handling works"
+
+      - name: "Test multiple version formats"
+        shell: bash
+        run: |
+          tag-validate validate "1.2.3" --json | \
+            jq -e '.version_type == "semver"'
+
+          tag-validate validate "2025.1.1" --json | \
+            jq -e '.version_type == "calver"'
+
+          tag-validate validate "v1.0.0" --json | \
+            jq -e '.has_prefix == true'
+
+          tag-validate validate "1.0.0-beta" --json | \
+            jq -e '.is_development == true'
+
+          echo "✓ Multiple formats work"
+
+      - name: "Test version components extraction"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.2.3" --json)
+
+          major=$(echo "$output" | jq -r '.major')
+          minor=$(echo "$output" | jq -r '.minor')
+          patch=$(echo "$output" | jq -r '.patch')
+
+          if [ "$major" != "1" ] || [ "$minor" != "2" ] || \
+            [ "$patch" != "3" ]; then
+            echo "Error: Version components not extracted correctly"
+            exit 1
+          fi
+
+          echo "✓ Version components extracted"
+
+      - name: "Test prerelease handling"
+        shell: bash
+        run: |
+          output=$(tag-validate validate "1.0.0-beta.1" --json)
+
+          prerelease=$(echo "$output" | jq -r '.prerelease')
+          if [ "$prerelease" == "null" ] || [ -z "$prerelease" ]; then
+            echo "Error: Prerelease not detected"
+            exit 1
+          fi
+
+          echo "✓ Prerelease handling works"
+
+      - name: "Test build metadata"
+        shell: bash
+        run: |
+          tag-validate validate "1.0.0+build.123" --json \
+            > /dev/null
+          echo "✓ Build metadata handling checked"
+
+      # ==================================================================
+      # FINAL SUMMARY
+      # ==================================================================
+
+      - name: "Test Summary"
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "✅ ALL TESTS PASSED"
+          echo "========================================"
+          echo ""
+          echo "Test Categories Completed:"
+          echo "  ✓ String Validation"
+          echo "  ✓ Development Tags"
+          echo "  ✓ Edge Cases"
+          echo "  ✓ Local Tags"
+          echo "  ✓ SSH Signatures"
+          echo "  ✓ Remote Tags"
+          echo "  ✓ Signature Detection (GPG/SSH/unsigned)"
+          echo "  ✓ Python CLI Comprehensive Tests"
+          echo ""
+          echo "Total: 50+ test cases executed successfully!"
+          echo "========================================"

@@ -1,0 +1,345 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Runs on a new pull request, performs build and runs tests
+name: 'Python Build/Test'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      clear_cache:
+        description: 'Clear all Python dependency caches'
+        type: boolean
+        default: false
+        required: false
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+    branches:
+      - main
+      - master
+    paths:
+      - '**'
+      - '!.github/**'
+      - '!.*'
+      - '!tox.ini'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: write  # Required for cache deletion when clear_cache is true
+
+jobs:
+  repository-metadata:
+    name: "Repository Metadata"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        with:
+          egress-policy: audit
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: "Gather repository metadata"
+        id: repo-metadata
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/repository-metadata-action@5fd432a3a4593f838a8a51e39be81c9afb250e0b  # v0.1.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          generate_summary: 'false'
+          artifact_upload: 'true'
+          artifact_formats: 'json'
+
+  python-build:
+    name: 'Python Build'
+    runs-on: 'ubuntu-latest'
+    outputs:
+      matrix_json: "${{ steps.python-build.outputs.matrix_json }}"
+      artefact_name: "${{ steps.python-build.outputs.artefact_name }}"
+      artefact_path: "${{ steps.python-build.outputs.artefact_path }}"
+    permissions:
+      contents: read
+      actions: write  # Required for cache deletion when clear_cache is true
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        with:
+          egress-policy: 'audit'
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: 'Build Python project'
+        id: python-build
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@e74a56d61b59b55516ee05037303528423d8ed5a  # v1.0.0
+        with:
+          clear_cache: ${{ github.event.inputs.clear_cache || 'false' }}
+
+  python-tests:
+    name: 'Python Tests'
+    runs-on: 'ubuntu-latest'
+    needs: 'python-build'
+    # Matrix job
+    strategy:
+      fail-fast: false
+      matrix: "${{ fromJson(needs.python-build.outputs.matrix_json) }}"
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        with:
+          egress-policy: audit
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Python tests [pytest] ${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-test-action@92d4110d44ebc18fa4575c6b00203ff67d01a1cb  # v1.0.1
+        with:
+          python_version: ${{ matrix.python-version }}
+
+  python-audit:
+    name: 'Python Audit'
+    runs-on: 'ubuntu-latest'
+    needs: 'python-build'
+    # Matrix job
+    strategy:
+      fail-fast: false
+      matrix: "${{ fromJson(needs.python-build.outputs.matrix_json) }}"
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        with:
+          egress-policy: 'audit'
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Audit dependencies ${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-audit-action@d54ca0172525184e38779eaaaade7edf4ad22b89  # v0.2.4
+        with:
+          python_version: "${{ matrix.python-version }}"
+
+  sbom:
+    name: 'Generate SBOM'
+    runs-on: ubuntu-latest
+    needs: 'python-build'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Generate SBOM"
+        id: sbom
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-sbom-action@ae4aca2ef28d7da4ec95049cc78be43e632d322a  # v0.1.0
+        with:
+          include_dev: "false"
+          sbom_format: "both"
+
+      - name: "Upload SBOM artifacts"
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: sbom-files
+          path: |
+            sbom-cyclonedx.json
+            sbom-cyclonedx.xml
+          retention-days: 45
+
+      - name: "Security scan with Grype (SARIF)"
+        # yamllint disable-line rule:line-length
+        uses: anchore/scan-action@3c9a191a0fbab285ca6b8530b5de5a642cba332f  # v7.2.2
+        id: grype-sarif
+        with:
+          sbom: "${{ steps.sbom.outputs.sbom_json_path }}"
+          output-format: "sarif"
+          output-file: "grype-results.sarif"
+          fail-build: "true"
+
+      - name: "Security scan with Grype (Text/Table)"
+        # yamllint disable-line rule:line-length
+        uses: anchore/scan-action@3c9a191a0fbab285ca6b8530b5de5a642cba332f  # v7.2.2
+        id: grype-table
+        if: always()
+        with:
+          sbom: "${{ steps.sbom.outputs.sbom_json_path }}"
+          output-format: "table"
+          output-file: "grype-results.txt"
+          fail-build: "false"
+
+      - name: "Upload Grype scan results"
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        if: always()
+        with:
+          name: grype-scan-results
+          path: |
+            grype-results.sarif
+            grype-results.txt
+          retention-days: 90
+
+      - name: "Grype summary"
+        if: always()
+        run: |
+            # Grype summary
+            echo "## Grype Summary" >> "$GITHUB_STEP_SUMMARY"
+            [ -f grype-results.txt ] && cat grype-results.txt \
+              >> "$GITHUB_STEP_SUMMARY" || echo "No scan results available" \
+              >> "$GITHUB_STEP_SUMMARY"
+
+  integration-test:
+    # This job tests verify-key with real GitHub API calls
+    # Note: Repository variables (SSH_PUBLIC_KEY_STRING, KEY_USERNAME) are
+    # not available to pull requests from forks for security reasons.
+    # Tests will skip gracefully in those cases.
+    name: 'Integration Tests'
+    runs-on: 'ubuntu-latest'
+    needs: 'python-build'
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        with:
+          egress-policy: audit
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: '3.12'
+
+      - name: "Install package"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: "Test verify-key with SSH public key"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SSH_KEY: ${{ vars.SSH_PUBLIC_KEY_STRING }}
+          KEY_USER: ${{ vars.KEY_USERNAME }}
+        run: |
+          # Check if variables are set
+          if [ -z "$SSH_KEY" ] || [ -z "$KEY_USER" ]; then
+            echo "⚠️  Skipping SSH key test - variables not available"
+            echo "This is expected for pull requests from forks"
+            echo '{"success": true, "skipped": true}' > ssh-result.json
+            exit 0
+          fi
+
+          # Test SSH key verification with auto-detection
+          tag-validate verify-github \
+            "$SSH_KEY" \
+            --owner "$KEY_USER" \
+            --json > ssh-result.json
+
+          # Verify the result
+          echo "SSH Key Verification Result:"
+          cat ssh-result.json
+
+          # Check if verification succeeded
+          if ! jq -e '.success == true and .is_registered == true' \
+            ssh-result.json > /dev/null; then
+            echo "❌ SSH key verification failed"
+            exit 1
+          fi
+
+          echo "✅ SSH key verification succeeded"
+
+      - name: "Test verify-key with GPG subkey"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEY_USER: ${{ vars.KEY_USERNAME }}
+        run: |
+          # Check if variable is set
+          if [ -z "$KEY_USER" ]; then
+            echo "⚠️  Skipping GPG key test - KEY_USERNAME not available"
+            echo "This is expected for pull requests from forks"
+            echo '{"success": true, "skipped": true}' > gpg-result.json
+            exit 0
+          fi
+
+          # Test GPG subkey verification with auto-detection
+          tag-validate verify-github \
+            "FCE8AAABF53080F6" \
+            --owner "$KEY_USER" \
+            --json > gpg-result.json
+
+          # Verify the result
+          echo "GPG Key Verification Result:"
+          cat gpg-result.json
+
+          # Check if verification succeeded
+          if ! jq -e '.success == true and .is_registered == true' \
+            gpg-result.json > /dev/null; then
+            echo "❌ GPG key verification failed"
+            exit 1
+          fi
+
+          echo "✅ GPG key verification succeeded (subkey matched)"
+
+      - name: "Integration test summary"
+        if: always()
+        run: |
+          {
+            echo "## Integration Test Results"
+            echo ""
+            echo "### SSH Key Verification"
+            if [ -f ssh-result.json ]; then
+              if jq -e '.skipped == true' ssh-result.json > /dev/null 2>&1; then
+                echo "⚠️ Test skipped (variables not available)"
+              else
+                echo "\`\`\`json"
+                cat ssh-result.json
+                echo "\`\`\`"
+              fi
+            else
+              echo "No SSH test results available"
+            fi
+            echo ""
+            echo "### GPG Key Verification"
+            if [ -f gpg-result.json ]; then
+              if jq -e '.skipped == true' gpg-result.json > /dev/null 2>&1; then
+                echo "⚠️ Test skipped (variables not available)"
+              else
+                echo "\`\`\`json"
+                cat gpg-result.json
+                echo "\`\`\`"
+              fi
+            else
+              echo "No GPG test results available"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

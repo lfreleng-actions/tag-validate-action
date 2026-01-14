@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2025 The Linux Foundation
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # GPG Test Key - Setup Instructions
 
 > **Note for Forks**: If you're using a fork of this repository, replace

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
+result.json
+test-repo-**/
+
 # Temporary and binary files
 *~
 *.py[cod]
@@ -58,3 +61,8 @@ MANIFEST
 
 # Node
 node_modules/*
+
+# Local testing with Nektos/Act
+.secrets
+.actrc.local
+act-*.log
