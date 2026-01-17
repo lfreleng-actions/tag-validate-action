@@ -47,6 +47,7 @@ Run with verbose output:
 """
 
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -54,6 +55,24 @@ from typer.testing import CliRunner
 from tag_validate.cli import app
 
 runner = CliRunner()
+
+
+def strip_ansi_codes(text: str) -> str:
+    """
+    Remove ANSI escape codes from text.
+
+    Typer/Rich adds color formatting to CLI output which includes ANSI escape
+    sequences. These need to be stripped to perform accurate string matching
+    in tests, especially in CI environments where color output may differ.
+
+    Args:
+        text: Text potentially containing ANSI escape codes
+
+    Returns:
+        Text with ANSI codes removed
+    """
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi_escape.sub("", text)
 
 
 class TestValidateEmptyVersionString:
@@ -189,11 +208,15 @@ class TestValidateVersionStringValidation:
         result = runner.invoke(app, ["validate", "--help"])
 
         assert result.exit_code == 0
+
+        # Strip ANSI codes for easier assertions
+        output = strip_ansi_codes(result.stdout)
+
         # Help should mention version_string argument
         assert (
-            "version_string" in result.stdout.lower()
-            or "version-string" in result.stdout.lower()
-            or "version string" in result.stdout.lower()
+            "version_string" in output.lower()
+            or "version-string" in output.lower()
+            or "version string" in output.lower()
         )
 
 

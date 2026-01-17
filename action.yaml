@@ -46,12 +46,36 @@ inputs:
       Requires a GitHub token.
     required: false
     default: 'false'
+  require_gerrit:
+    description: >-
+      Requires that the signing key is registered to a Gerrit account.
+      Set to 'true' to auto-detect Gerrit server from GitHub org
+      (pattern: gerrit.[org].org),
+      or provide a specific Gerrit server hostname/URL
+      (e.g., 'gerrit.onap.org').
+    required: false
+    default: 'false'
   require_owner:
     description: >-
       GitHub username(s) or email address(es) that must own the signing key
       (comma or space-separated for multiple, e.g., 'octocat,monalisa' or
       'user@example.com').
       Requires a GitHub token. When specified, require_github is implied.
+    required: false
+    default: ''
+  gerrit_username:
+    description: >-
+      Gerrit username for HTTP authentication. Required for Gerrit servers
+      that restrict public access to user key information. Can also be set
+      via GERRIT_USERNAME environment variable.
+    required: false
+    default: ''
+  gerrit_password:
+    description: >-
+      Gerrit HTTP password for authentication. This must be an HTTP password
+      generated from your Gerrit account settings (Settings > HTTP Credentials),
+      NOT your SSO/LDAP password. Required when gerrit_username is provided.
+      Can also be set via GERRIT_PASSWORD environment variable.
     required: false
     default: ''
   reject_development:
@@ -131,9 +155,36 @@ runs:
       shell: bash
       run: |
         # Install dependencies without the package itself to avoid setuptools-scm issues
-        pip install dependamerge>=0.1.19 aiolimiter>=1.2.1 "httpx[http2]>=0.28.1" pydantic>=2.12.5 rich>=14.2.0 typer>=0.21.1 python-gnupg>=0.5.3 cryptography>=46.0.3 packaging>=24.2
+        pip install dependamerge>=0.1.19 aiolimiter>=1.2.1 "httpx[http2]>=0.28.1" pydantic>=2.12.5 rich>=14.2.0 typer>=0.21.1 python-gnupg>=0.5.3 cryptography>=46.0.3 packaging>=24.2 pygerrit2>=2.0.15
         # Add the source directory to PYTHONPATH for direct module access
         echo "PYTHONPATH=${{ github.action_path }}/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
+
+    - name: 'Verify Python module import'
+      if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
+      shell: bash
+      run: |
+        # Test if the Python module can be imported
+        echo "🔍 Testing Python module import..."
+        echo "PYTHONPATH: ${PYTHONPATH}"
+        echo "Python sys.path:"
+        python -c "import sys; print('\n'.join(sys.path))"
+        echo ""
+        echo "Attempting to import tag_validate module..."
+        python -c "import tag_validate; print('✅ tag_validate module imported successfully'); import tag_validate; print('Module location:', tag_validate.__file__)" || {
+          echo "❌ Failed to import tag_validate module" >&2
+          echo "Directory contents of src/:" >&2
+          ls -la "${{ github.action_path }}/src/" || echo "src/ directory not found" >&2
+          echo "Directory contents of src/tag_validate/:" >&2
+          ls -la "${{ github.action_path }}/src/tag_validate/" || echo "src/tag_validate/ directory not found" >&2
+          exit 1
+        }
+        echo ""
+        echo "Testing CLI entry point..."
+        python -m tag_validate.cli --version || {
+          echo "❌ Failed to run CLI --version" >&2
+          exit 1
+        }
+        echo "✅ All import tests passed"
 
     - name: 'Fetch tag objects'
       shell: bash
@@ -159,10 +210,12 @@ runs:
         REQUIRE_TYPE=$(echo "${{ inputs.require_type }}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
         REQUIRE_SIGNED=$(echo "${{ inputs.require_signed }}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
         REQUIRE_GITHUB=$(echo "${{ inputs.require_github }}" | tr '[:upper:]' '[:lower:]')
+        REQUIRE_GERRIT=$(echo "${{ inputs.require_gerrit }}" | tr '[:upper:]' '[:lower:]')
         REQUIRE_OWNER="${{ inputs.require_owner }}"
         REJECT_DEVELOPMENT=$(echo "${{ inputs.reject_development }}" | tr '[:upper:]' '[:lower:]')
         PERMIT_MISSING=$(echo "${{ inputs.permit_missing }}" | tr '[:upper:]' '[:lower:]')
         DEBUG=$(echo "${{ inputs.debug }}" | tr '[:upper:]' '[:lower:]')
+        USE_LOCAL_ACTION=$(echo "${{ inputs.use_local_action }}" | tr '[:upper:]' '[:lower:]')
 
         # Build command arguments
         ARGS=("--json")
@@ -236,6 +289,19 @@ runs:
           VERIFY_ARGS+=("--require-github")
         fi
 
+        # Add Gerrit key verification if requested
+        if [ -n "${REQUIRE_GERRIT}" ] && [ "${REQUIRE_GERRIT}" != "false" ]; then
+          VERIFY_ARGS+=("--require-gerrit" "${REQUIRE_GERRIT}")
+        fi
+
+        # Add Gerrit authentication if provided
+        if [ -n "${{ inputs.gerrit_username }}" ]; then
+          VERIFY_ARGS+=("--gerrit-username" "${{ inputs.gerrit_username }}")
+        fi
+        if [ -n "${{ inputs.gerrit_password }}" ]; then
+          VERIFY_ARGS+=("--gerrit-password" "${{ inputs.gerrit_password }}")
+        fi
+
         # Add require-owner if provided (comma or space separated values)
         if [ -n "${REQUIRE_OWNER}" ]; then
           VERIFY_ARGS+=("--require-owner" "${REQUIRE_OWNER}")
@@ -260,7 +326,7 @@ runs:
         fi
 
         # Determine which CLI invocation method to use
-        if [[ "${{ inputs.use_local_action }}" == "true" ]] || \
+        if [[ "${USE_LOCAL_ACTION}" == "true" ]] || \
            [[ "${{ github.repository }}" =~ lfreleng-actions/tag-validate-action ]]; then
           CLI_CMD="python -m tag_validate.cli"
           echo "Using local action code: ${CLI_CMD}"
@@ -292,6 +358,21 @@ runs:
           ALL_VERIFY_ARGS=("${COMMON_ARGS[@]}" "${VERIFY_ARGS[@]}")
           echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]} --json"
           JSON_OUTPUT=$(${CLI_CMD} ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" --json 2>&1) || EXIT_CODE=$?
+        fi
+
+        # Display command exit code and raw output for debugging
+        echo "📊 Command exit code: ${EXIT_CODE}"
+        echo "📄 Raw output (first 2000 chars):"
+        echo "${JSON_OUTPUT}" | head -c 2000
+        echo ""
+        echo "---"
+
+        # If command failed, show full output and exit
+        if [ ${EXIT_CODE} -ne 0 ]; then
+          echo "❌ Command failed with exit code ${EXIT_CODE}" >&2
+          echo "Full output:" >&2
+          echo "${JSON_OUTPUT}" >&2
+          exit ${EXIT_CODE}
         fi
 
         # Extract and validate JSON from output using Python
@@ -331,9 +412,15 @@ runs:
         EXTRACT_EXIT_CODE=$?
 
         if [ ${EXTRACT_EXIT_CODE} -ne 0 ]; then
-          echo "Error: Failed to extract valid JSON from tag-validate CLI output" >&2
-          echo "Raw output was:" >&2
+          echo "❌ Error: Failed to extract valid JSON from tag-validate CLI output" >&2
+          echo "📄 Full raw output:" >&2
           echo "${JSON_OUTPUT}" >&2
+          echo "" >&2
+          echo "🔍 Debugging info:" >&2
+          echo "  - Command: ${CLI_CMD}" >&2
+          echo "  - Exit code: ${EXIT_CODE}" >&2
+          echo "  - Output length: ${#JSON_OUTPUT} chars" >&2
+          echo "  - First 500 chars: ${JSON_OUTPUT:0:500}" >&2
           exit 1
         fi
 
@@ -410,3 +497,5 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         GITHUB_SERVER_URL: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}
+        GERRIT_USERNAME: ${{ inputs.gerrit_username }}
+        GERRIT_PASSWORD: ${{ inputs.gerrit_password }}

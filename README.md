@@ -51,15 +51,40 @@ jobs:
           require_signed: gpg
 ```
 
-### Check Remote Repository Tag
+### Check Local Repository Tag
 
 ```yaml
-- name: "Check remote tag"
+- name: "Check local tag"
   uses: lfreleng-actions/tag-validate-action@v1
   with:
-    tag_location: "lfreleng-actions/tag-validate-action/v1.0.0"
+    tag_location: v1.0.0
     require_type: semver
     require_signed: gpg
+```
+
+### Check with Gerrit Verification
+
+```yaml
+- name: "Check tag with Gerrit verification"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    tag_location: v1.0.0
+    require_type: semver
+    require_signed: gpg
+    require_gerrit: 'true'  # Auto-discovers gerrit.[org].org
+```
+
+### Check with Both GitHub and Gerrit
+
+```yaml
+- name: "Check tag with dual verification"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    tag_location: v1.0.0
+    require_github: 'true'
+    require_gerrit: 'gerrit.onap.org'
+    require_owner: 'maintainer@project.org'
+    token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Check Tag String
@@ -76,19 +101,20 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name               | Required | Default | Description                                                             |
-| ------------------ | -------- | ------- | ----------------------------------------------------------------------- |
-| tag_location       | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)          |
-| tag_string         | False    | ''      | Tag string to check (version format, signature check skipped)           |
-| require_type       | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated) |
-| require_signed     | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`            |
-| require_github     | False    | false   | Requires that signing key is registered to a GitHub account             |
-| require_owner      | False    | ''      | GitHub username(s)/email(s) that must own signing key                   |
-| reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)        |
-| permit_missing     | False    | false   | Allow missing tags without error                                        |
-| token              | False    | ''      | GitHub token for authenticated API calls and private repo access        |
-| github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                        |
-| debug              | False    | false   | Enable debug output including git error messages                        |
+| Name               | Required | Default | Description                                                                                               |
+| ------------------ | -------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| tag_location       | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)                                            |
+| tag_string         | False    | ''      | Tag string to check (version format, signature check skipped)                                             |
+| require_type       | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated)                                   |
+| require_signed     | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`                                              |
+| require_github     | False    | false   | Requires that signing key is registered to a GitHub account                                               |
+| require_gerrit     | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname) |
+| require_owner      | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                              |
+| reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                          |
+| permit_missing     | False    | false   | Allow missing tags without error                                                                          |
+| token              | False    | ''      | GitHub token for authenticated API calls and private repo access                                          |
+| github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                          |
+| debug              | False    | false   | Enable debug output including git error messages                                                          |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -925,6 +951,25 @@ make test-all
 
 See [docs/LOCAL_TESTING.md](docs/LOCAL_TESTING.md) for detailed setup and
 usage instructions.
+
+## Gerrit Integration
+
+This action now supports verifying cryptographic signing keys against Gerrit
+Code Review servers. This provides enhanced security by ensuring that
+authorized developers with registered keys can create valid signed tags.
+
+For comprehensive documentation on Gerrit integration, including setup
+examples, server configuration, and troubleshooting, see:
+
+📖 **[GERRIT_INTEGRATION.md](docs/GERRIT_INTEGRATION.md)**
+
+Key features:
+
+- Auto-discovery of Gerrit servers from GitHub organization names
+- SSH and GPG key verification against Gerrit accounts
+- Support for required account owners
+- Combined GitHub + Gerrit verification
+- Works with popular Gerrit instances (ONAP, OpenDaylight, Eclipse, etc.)
 
 ## Contributing
 

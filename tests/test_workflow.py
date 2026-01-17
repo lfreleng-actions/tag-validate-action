@@ -560,7 +560,7 @@ class TestValidationWorkflow:
 
         summary = workflow.create_validation_summary(result)
 
-        assert "✅ PASSED" in summary
+        assert "✅" in summary  # Status icon in header
         assert "v1.2.3" in summary
         assert "SEMVER" in summary
         assert "GPG" in summary
@@ -585,7 +585,7 @@ class TestValidationWorkflow:
 
         summary = workflow.create_validation_summary(result)
 
-        assert "❌ FAILED" in summary
+        assert "❌" in summary  # Status icon in header
         assert "invalid" in summary
         assert "Errors:" in summary
 

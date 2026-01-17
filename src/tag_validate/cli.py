@@ -21,11 +21,13 @@ from rich.table import Table
 from rich.logging import RichHandler
 
 from . import __version__
+from .gerrit_keys import GerritKeysClient
 from .github_keys import GitHubKeysClient
 from .models import KeyVerificationResult, ValidationConfig
 from .signature import SignatureDetector, SignatureDetectionError
 from .validation import TagValidator
 from .workflow import ValidationWorkflow
+from .display_utils import format_user_details, format_server_display
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -436,6 +438,342 @@ def main(
 
 
 
+@app.command(name="gerrit")
+def verify_gerrit(
+    key_id: str = typer.Argument(
+        ...,
+        help="GPG key ID (e.g., 'FCE8AAABF53080F6') or SSH fingerprint (e.g., 'SHA256:...')"
+    ),
+    owner: str = typer.Option(
+        ...,
+        "--owner",
+        "-o",
+        help="Gerrit username or email address to verify key against",
+    ),
+    key_type: str = typer.Option(
+        "auto",
+        "--type",
+        "-t",
+        help="Key type: 'gpg', 'ssh', or 'auto' (default: auto-detect)",
+    ),
+    server: Optional[str] = typer.Option(
+        None,
+        "--server",
+        "-s",
+        help="Gerrit server hostname or URL (e.g., 'gerrit.onap.org' or 'https://gerrit.example.com')",
+    ),
+    github_org: Optional[str] = typer.Option(
+        None,
+        "--github-org",
+        "-g",
+        help="GitHub organization for server auto-discovery (e.g., 'onap' -> 'gerrit.onap.org')",
+    ),
+    gerrit_username: Optional[str] = typer.Option(
+        None,
+        "--gerrit-username",
+        envvar="GERRIT_USERNAME",
+        help="Gerrit username for HTTP authentication (can also use GERRIT_USERNAME env var)",
+    ),
+    gerrit_password: Optional[str] = typer.Option(
+        None,
+        "--gerrit-password",
+        envvar="GERRIT_PASSWORD",
+        help="Gerrit HTTP password for authentication (can also use GERRIT_PASSWORD env var)",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output results as JSON",
+    ),
+    test_mode: bool = typer.Option(
+        False,
+        "--test-mode",
+        help="Test key parsing and normalization without making Gerrit API calls",
+        hidden=True,
+    ),
+):
+    """
+    Verify if a specific GPG key ID or SSH fingerprint is registered on Gerrit.
+
+    This command directly checks if a key is registered to a Gerrit user
+    without needing to extract it from a tag signature.
+
+    The key type is auto-detected by default, but can be explicitly specified
+    with --type if needed.
+
+    Either --server or --github-org must be provided, or both can be used
+    where --server takes precedence.
+
+    Authentication is optional but required for Gerrit servers that restrict
+    public access to user key information. Use --gerrit-username and
+    --gerrit-password, or set GERRIT_USERNAME and GERRIT_PASSWORD environment
+    variables. The password must be a Gerrit HTTP password generated from
+    your account settings, not your SSO/LDAP password.
+
+    Examples:
+        # Auto-detect key type (GPG) with explicit server
+        tag-validate gerrit FCE8AAABF53080F6 --owner user@example.com --server gerrit.onap.org
+
+        # Auto-detect key type (SSH) with GitHub org discovery
+        tag-validate gerrit "SHA256:abc123..." --owner user@example.com --github-org onap
+
+        # With authentication (using environment variables)
+        tag-validate gerrit FCE8AAABF53080F6 --owner user@example.com --server gerrit.onap.org
+
+        # With authentication (using CLI options)
+        tag-validate gerrit FCE8AAABF53080F6 --owner user@example.com --server gerrit.onap.org \
+          --gerrit-username myuser --gerrit-password myHTTPpassword
+
+        # Explicitly specify type with server URL
+        tag-validate gerrit FCE8AAABF53080F6 --owner user@example.com --server https://gerrit.example.com --type gpg
+    """
+
+    # Handle test mode first, before any other validations
+    if test_mode:
+        async def _test_mode():
+            try:
+                # Suppress ALL logs when in test mode
+                _suppress_logging_for_json()
+
+                # Auto-detect or validate key type
+                detected_type = key_type
+                if key_type == "auto":
+                    detected_type = _detect_key_type(key_id)
+                    if detected_type == "unknown":
+                        error_msg = f"Could not auto-detect key type from: {key_id[:50]}... Please specify --type gpg or --type ssh"
+                        if json_output:
+                            console.print_json(data={"success": False, "error": error_msg})
+                        else:
+                            console.print(f"[red]❌ {error_msg}[/red]")
+                        raise typer.Exit(1)
+                elif key_type not in ["gpg", "ssh"]:
+                    error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                    if json_output:
+                        console.print_json(data={"success": False, "error": error_msg})
+                    else:
+                        console.print(f"[red]❌ {error_msg}[/red]")
+                    raise typer.Exit(1)
+
+                # Test key parsing/normalization
+                if detected_type == "ssh":
+                    try:
+                        normalized_fingerprint = _normalize_ssh_fingerprint(key_id)
+                        if json_output:
+                            result = {
+                                "test_mode": True,
+                                "key_type": detected_type,
+                                "original_key": key_id,
+                                "normalized_key": normalized_fingerprint,
+                                "success": True,
+                            }
+                            console.print_json(data=result)
+                        else:
+                            console.print(f"[green]✅ SSH key parsing successful[/green]")
+                            console.print(f"Original: {key_id}")
+                            console.print(f"Normalized: {normalized_fingerprint}")
+                    except Exception as e:
+                        error_msg = f"SSH key parsing failed: {e}"
+                        if json_output:
+                            console.print_json(data={"test_mode": True, "success": False, "error": error_msg})
+                        else:
+                            console.print(f"[red]❌ {error_msg}[/red]")
+                        raise typer.Exit(1)
+                else:  # GPG
+                    if json_output:
+                        result = {
+                            "test_mode": True,
+                            "key_type": detected_type,
+                            "original_key": key_id,
+                            "normalized_key": key_id.upper().replace("0X", ""),
+                            "success": True,
+                        }
+                        console.print_json(data=result)
+                    else:
+                        console.print(f"[green]✅ GPG key parsing successful[/green]")
+                        console.print(f"Original: {key_id}")
+                        console.print(f"Normalized: {key_id.upper().replace('0X', '')}")
+
+            except typer.Exit:
+                raise
+            except Exception as e:
+                if json_output:
+                    console.print_json(data={"test_mode": True, "success": False, "error": str(e)})
+                else:
+                    console.print(f"[red]❌ Test failed: {e}[/red]")
+                raise typer.Exit(1)
+
+        # Run test mode and return
+        asyncio.run(_test_mode())
+        return
+
+    async def _verify():
+        try:
+            # Suppress ALL logs when JSON output is requested
+            if json_output:
+                _suppress_logging_for_json()
+
+            # Validate server/github_org parameters
+            if not server and not github_org:
+                error_msg = "Either --server or --github-org must be provided"
+                if json_output:
+                    console.print_json(data={"success": False, "error": error_msg})
+                else:
+                    console.print(f"[red]❌ {error_msg}[/red]")
+                raise typer.Exit(EXIT_INVALID_INPUT)
+
+            # Auto-detect or validate key type
+            detected_type = key_type
+            if key_type == "auto":
+                detected_type = _detect_key_type(key_id)
+                if detected_type == "unknown":
+                    error_msg = f"Could not auto-detect key type from: {key_id[:50]}... Please specify --type gpg or --type ssh"
+                    if json_output:
+                        console.print_json(data={"success": False, "error": error_msg})
+                    else:
+                        console.print(f"[red]❌ {error_msg}[/red]")
+                    raise typer.Exit(1)
+            elif key_type not in ["gpg", "ssh"]:
+                error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                if json_output:
+                    console.print_json(data={"success": False, "error": error_msg})
+                else:
+                    console.print(f"[red]❌ {error_msg}[/red]")
+                raise typer.Exit(1)
+
+            # Verify key on Gerrit
+            account = None
+            verification = None
+
+            if json_output:
+                async with GerritKeysClient(
+                    server=server,
+                    github_org=github_org,
+                    username=gerrit_username,
+                    password=gerrit_password,
+                ) as client:
+                    # Look up account by email or username
+                    try:
+                        if "@" in owner:
+                            account = await client.lookup_account_by_email(owner)
+                        else:
+                            account = await client.lookup_account_by_username(owner)
+
+                        if account is None:
+                            error_msg = f"Gerrit account not found for '{owner}'"
+                            console.print_json(data={"success": False, "error": error_msg})
+                            raise typer.Exit(EXIT_INVALID_INPUT)
+                    except Exception as e:
+                        error_msg = f"Failed to find Gerrit account for '{owner}': {e}"
+                        console.print_json(data={"success": False, "error": error_msg})
+                        raise typer.Exit(EXIT_INVALID_INPUT)
+
+                    # Verify the key
+                    if detected_type == "gpg":
+                        verification = await client.verify_gpg_key_registered(
+                            account_id=account.account_id,
+                            key_id=key_id,
+                        )
+                    else:  # ssh
+                        normalized_fingerprint = _normalize_ssh_fingerprint(key_id)
+                        verification = await client.verify_ssh_key_registered(
+                            account_id=account.account_id,
+                            fingerprint=normalized_fingerprint,
+                        )
+            else:
+                with console.status("[bold green]Verifying key on Gerrit..."):
+                    async with GerritKeysClient(
+                        server=server,
+                        github_org=github_org,
+                        username=gerrit_username,
+                        password=gerrit_password,
+                    ) as client:
+                        # Look up account by email or username
+                        try:
+                            if "@" in owner:
+                                account = await client.lookup_account_by_email(owner)
+                            else:
+                                account = await client.lookup_account_by_username(owner)
+
+                            if account is None:
+                                error_msg = f"Gerrit account not found for '{owner}'"
+                                console.print(f"[red]❌ {error_msg}[/red]")
+                                raise typer.Exit(EXIT_INVALID_INPUT)
+                        except Exception as e:
+                            error_msg = f"Failed to find Gerrit account for '{owner}'"
+                            console.print(f"[red]❌ {error_msg}[/red]")
+                            raise typer.Exit(EXIT_INVALID_INPUT)
+
+                        # Verify the key
+                        if detected_type == "gpg":
+                            verification = await client.verify_gpg_key_registered(
+                                account_id=account.account_id,
+                                key_id=key_id,
+                            )
+                        else:  # ssh
+                            normalized_fingerprint = _normalize_ssh_fingerprint(key_id)
+                            verification = await client.verify_ssh_key_registered(
+                                account_id=account.account_id,
+                                fingerprint=normalized_fingerprint,
+                            )
+
+            # Display results
+            if json_output:
+                result = {
+                    "success": verification.key_registered,
+                    "key_type": detected_type,
+                    "key_id": key_id,
+                    "owner_input": owner,
+                    "username": account.username,
+                    "email": account.email,
+                    "name": account.name,
+                    "server": verification.server,
+                    "service": "gerrit",
+                    "is_registered": verification.key_registered,
+                }
+                console.print_json(data=result)
+            else:
+                # Create a mock SignatureInfo for display purposes
+                from .models import SignatureInfo
+                from typing import cast, Literal
+                mock_signature = SignatureInfo(
+                    type=cast(Literal["gpg", "ssh", "unsigned", "lightweight", "invalid", "gpg-unverifiable"], detected_type),
+                    verified=True,  # We're not verifying a signature, just checking registration
+                    key_id=key_id if detected_type == "gpg" else None,
+                    fingerprint=key_id if detected_type == "ssh" else None,
+                    signer_email=None,
+                    signature_data=None,
+                )
+                _display_verification_result(
+                    verification, mock_signature, owner,
+                    platform="Gerrit", account=account
+                )
+
+            # Exit with appropriate code
+            if verification.key_registered:
+                raise typer.Exit(EXIT_SUCCESS)
+            else:
+                raise typer.Exit(EXIT_VALIDATION_FAILED)
+
+        except typer.Exit:
+            raise
+        except SystemExit:
+            raise
+        except Exception as e:
+            if json_output:
+                console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_UNEXPECTED_ERROR})
+            else:
+                console.print(f"\n[red]❌ Error:[/red] {e}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.exception("Unexpected error during verification")
+                else:
+                    logger.error(f"Unexpected error during verification: {e}")
+            raise typer.Exit(EXIT_UNEXPECTED_ERROR)
+
+    # Run async function
+    asyncio.run(_verify())
+
+
 @app.command(name="github")
 def verify_github(
     key_id: str = typer.Argument(
@@ -471,6 +809,16 @@ def verify_github(
         "--no-subkeys",
         help="Disable GPG subkey verification (only check primary keys)",
     ),
+    api_url: str = typer.Option(
+        "https://api.github.com",
+        "--api-url",
+        help="GitHub API base URL (for GitHub Enterprise Server)",
+    ),
+    graphql_url: str = typer.Option(
+        "https://api.github.com/graphql",
+        "--graphql-url",
+        help="GitHub GraphQL endpoint URL (for GitHub Enterprise Server)",
+    ),
     test_mode: bool = typer.Option(
         False,
         "--test-mode",
@@ -497,6 +845,9 @@ def verify_github(
 
         # Explicitly specify type with username
         tag-validate github FCE8AAABF53080F6 --owner torvalds --type gpg --token $GITHUB_TOKEN
+
+        # GitHub Enterprise Server
+        tag-validate github FCE8AAABF53080F6 --owner torvalds --token $GITHUB_TOKEN --api-url https://github.example.com/api/v3
     """
 
     # Handle test mode first, before any other validations
@@ -627,12 +978,14 @@ def verify_github(
                     console.print(f"\n[red]❌ Error:[/red] {e}")
                 raise typer.Exit(EXIT_INVALID_INPUT)
 
-
-
+            # Fetch user details
+            user_details = None
+            async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
+                user_details = await client.get_user_details(resolved_owner)
 
             # Verify key on GitHub
             if json_output:
-                async with GitHubKeysClient(token=github_token) as client:
+                async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
                     if detected_type == "gpg":
                         verification = await client.verify_gpg_key_registered(
                             username=resolved_owner,
@@ -647,7 +1000,7 @@ def verify_github(
                         )
             else:
                 with console.status("[bold green]Verifying key on GitHub..."):
-                    async with GitHubKeysClient(token=github_token) as client:
+                    async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
                         if detected_type == "gpg":
                             verification = await client.verify_gpg_key_registered(
                                 username=resolved_owner,
@@ -663,26 +1016,48 @@ def verify_github(
 
             # Display results
             if json_output:
+                # Use verification.server if available, otherwise extract from API URL
+                server_hostname = verification.server
+                if not server_hostname:
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(api_url)
+                    # Extract just the hostname (e.g., "api.github.com" -> "github.com")
+                    netloc = parsed_url.netloc if parsed_url.netloc else "github.com"
+                    # For api.github.com, use github.com; for GHE, keep the hostname
+                    server_hostname = "github.com" if netloc == "api.github.com" else netloc.replace("api.", "")
+
                 result = {
                     "success": verification.key_registered,
                     "key_type": detected_type,
                     "key_id": key_id,
-                    "github_user": resolved_owner,
+                    "owner_input": owner,
+                    "username": user_details.get("login") if user_details else resolved_owner,
+                    "email": user_details.get("email") if user_details else None,
+                    "name": user_details.get("name") if user_details else None,
+                    "server": server_hostname,
+                    "service": "github",
                     "is_registered": verification.key_registered,
+                    # Backward-compatible aliases for older JSON consumers
+                    "github_user": user_details.get("login") if user_details else resolved_owner,
+                    "key_registered": verification.key_registered,
                 }
                 console.print_json(data=result)
             else:
                 # Create a mock SignatureInfo for display purposes
                 from .models import SignatureInfo
+                from typing import cast, Literal
                 mock_signature = SignatureInfo(
-                    type=detected_type,
+                    type=cast(Literal["gpg", "ssh", "unsigned", "lightweight", "invalid", "gpg-unverifiable"], detected_type),
                     verified=True,  # We're not verifying a signature, just checking registration
                     key_id=key_id if detected_type == "gpg" else None,
                     fingerprint=key_id if detected_type == "ssh" else None,
                     signer_email=None,
                     signature_data=None,
                 )
-                _display_verification_result(verification, mock_signature, resolved_owner)
+                _display_verification_result(
+                    verification, mock_signature, resolved_owner,
+                    platform="GitHub", github_user_details=user_details
+                )
 
             # Exit with appropriate code
             if verification.key_registered:
@@ -842,32 +1217,79 @@ def _display_verification_result(
     verification: KeyVerificationResult,
     signature_info,
     owner: str,
+    platform: str = "GitHub",
+    account=None,
+    github_user_details=None,
 ):
-    """Display key verification result in a formatted panel."""
+    """
+    Display key verification result in a formatted panel.
+
+    Args:
+        verification: Key verification result from GitHub or Gerrit
+        signature_info: Signature information
+        owner: Username or email of the key owner
+        platform: Platform name ("GitHub" or "Gerrit")
+        account: Optional GerritAccountInfo for Gerrit platform
+        github_user_details: Optional dict with GitHub user details
+    """
     if verification.key_registered:
         panel_style = "green"
         status_icon = "✅"
-        status_text = "VERIFIED"
-        message = f"The signing key is registered to GitHub user @{owner}"
+        status_text = "REGISTERED"
     else:
         panel_style = "red"
         status_icon = "❌"
-        status_text = "NOT VERIFIED"
-        message = f"The signing key is NOT registered to GitHub user @{owner}"
+        status_text = "NOT REGISTERED"
 
-    content = f"""
-[bold]{status_icon} {status_text}[/bold]
+    # Build user information display using shared utility
+    if platform == "Gerrit" and account:
+        user_lines = format_user_details(
+            username=account.username,
+            email=account.email,
+            name=account.name
+        )
+    elif platform == "GitHub" and github_user_details:
+        user_lines = format_user_details(
+            username=github_user_details.get("login"),
+            email=github_user_details.get("email"),
+            name=github_user_details.get("name")
+        )
+    else:
+        user_lines = []
 
-{message}
+    user_section = "\n".join(user_lines) if user_lines else f"  • {platform} User: {owner}"
 
-[bold]Details:[/bold]
-  • Signature Type: {signature_info.type}
-  • Key ID: {signature_info.key_id or 'N/A'}
-  • Fingerprint: {signature_info.fingerprint or 'N/A'}
-  • Signer: {signature_info.signer_email or 'N/A'}
-  • GitHub User: @{owner}
-  • Matched Key: N/A
-"""
+    # Build server display using shared utility
+    service = "gerrit" if platform == "Gerrit" else "github"
+    server_line = format_server_display(service, verification.server)
+
+    # Build details section - only show fields that have values
+    details_lines = [f"  • Signature Type: {signature_info.type}"]
+    if signature_info.key_id:
+        details_lines.append(f"  • Key ID: {signature_info.key_id}")
+    if signature_info.fingerprint:
+        details_lines.append(f"  • Fingerprint: {signature_info.fingerprint}")
+    if signature_info.signer_email:
+        details_lines.append(f"  • Signer: {signature_info.signer_email}")
+    details_section = "\n".join(details_lines)
+
+    # Build content with optional server line
+    content_parts = [f"[bold]{status_icon} {status_text}[/bold]"]
+
+    if server_line:
+        content_parts.append("")
+        content_parts.append(server_line)
+
+    content_parts.extend([
+        "",
+        "[bold]Details:[/bold]",
+        details_section,
+        "",
+        f"[bold]{platform} User:[/bold]",
+        user_section,
+    ])
+
+    content = "\n".join(content_parts)
 
     panel = Panel(
         content.strip(),
@@ -1125,6 +1547,11 @@ def verify(
         "--require-github",
         help="Verify signing key is registered on GitHub",
     ),
+    require_gerrit: Optional[str] = typer.Option(
+        None,
+        "--require-gerrit",
+        help="Verify signing key is registered on Gerrit. Requires a value: 'true' for auto-discovery from GitHub org (pattern: gerrit.<org>.org), or a specific Gerrit server hostname (e.g. 'gerrit.onap.org'). Example: --require-gerrit gerrit.onap.org",
+    ),
     owner: Optional[str] = typer.Option(
         None,
         "--owner",
@@ -1141,6 +1568,18 @@ def verify(
         "--token",
         envvar="GITHUB_TOKEN",
         help="GitHub API token (or set GITHUB_TOKEN env var)",
+    ),
+    gerrit_username: Optional[str] = typer.Option(
+        None,
+        "--gerrit-username",
+        envvar="GERRIT_USERNAME",
+        help="Gerrit username for HTTP authentication (can also use GERRIT_USERNAME env var)",
+    ),
+    gerrit_password: Optional[str] = typer.Option(
+        None,
+        "--gerrit-password",
+        envvar="GERRIT_PASSWORD",
+        help="Gerrit HTTP password for authentication (can also use GERRIT_PASSWORD env var)",
     ),
     reject_development: bool = typer.Option(
         False,
@@ -1288,6 +1727,18 @@ def verify(
                 # When require_owner is specified, require_github is implied
                 config_require_github = True
 
+            # Parse require_gerrit option
+            config_require_gerrit = False
+            gerrit_server = None
+            if require_gerrit:
+                if require_gerrit.lower() in ("true", "yes", "1"):
+                    config_require_gerrit = True
+                    # Server will be auto-discovered in the workflow
+                elif require_gerrit.lower() not in ("false", "no", "0"):
+                    # Treat as server hostname/URL
+                    config_require_gerrit = True
+                    gerrit_server = require_gerrit
+
             # Build configuration
             config = ValidationConfig(
                 require_semver=("semver" in require_type_list or "both" in require_type_list) if require_type_list else False,
@@ -1296,6 +1747,8 @@ def verify(
                 require_unsigned=config_require_unsigned,
                 allowed_signature_types=allowed_signature_types if require_signed else None,
                 require_github=config_require_github,
+                require_gerrit=config_require_gerrit,
+                gerrit_server=gerrit_server,
                 reject_development=reject_development if not skip_version_validation else False,
                 skip_version_validation=skip_version_validation,
                 allow_prefix=True,  # Default to allowing version prefixes
@@ -1303,7 +1756,12 @@ def verify(
             )
 
             # Create workflow
-            workflow = ValidationWorkflow(config, repo_path=repo_path)
+            workflow = ValidationWorkflow(
+                config,
+                repo_path=repo_path,
+                gerrit_username=gerrit_username,
+                gerrit_password=gerrit_password,
+            )
 
             # Resolve owner parameter (email or username) to username if provided
             resolved_owner = None
@@ -1398,7 +1856,6 @@ def verify(
                     "version_type": result.version_info.version_type if result.version_info else None,
                     "signature_type": result.signature_info.type if result.signature_info else None,
                     "signature_verified": result.signature_info.verified if result.signature_info else None,
-                    "key_registered": result.key_verification.key_registered if result.key_verification else None,
                     "development_tag": result.version_info.is_development if result.version_info else False,
                     "version_prefix": result.version_info.has_prefix if result.version_info else False,
                     "errors": result.errors,
@@ -1435,6 +1892,21 @@ def verify(
                             "day": result.version_info.day,
                             "micro": result.version_info.micro,
                         }
+
+                # Add key verification details if available
+                if result.key_verifications:
+                    output["key_verifications"] = []
+                    for k in result.key_verifications:
+                        verification = {
+                            "service": k.service,
+                            "key_registered": k.key_registered,
+                            "server": k.server,
+                            "username": k.username,
+                            "user_email": k.user_email,
+                            "user_name": k.user_name,
+                        }
+                        output["key_verifications"].append(verification)
+
                 console.print_json(data=output)
             else:
                 _display_validation_result(result, workflow)
@@ -1567,10 +2039,10 @@ def _display_validation_result(result, workflow: ValidationWorkflow):
     # Determine panel style
     if result.is_valid:
         panel_style = "green"
-        title = "✅ Tag Validation: PASSED"
+        title = f"✅ Tag Validation: {result.tag_name}"
     else:
         panel_style = "red"
-        title = "❌ Tag Validation: FAILED"
+        title = f"❌ Tag Validation: {result.tag_name}"
 
     panel = Panel(
         summary,
