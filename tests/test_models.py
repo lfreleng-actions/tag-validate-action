@@ -689,3 +689,244 @@ class TestModelIntegration:
         assert "v1.0.0" in json_str
         assert "version_type" in json_str
         assert "semver" in json_str
+
+
+class TestGerritAccountInfo:
+    """Test GerritAccountInfo model."""
+
+    def test_valid_gerrit_account(self, sample_gerrit_account):
+        """Test valid Gerrit account creation."""
+        account = sample_gerrit_account
+
+        assert account.account_id == 12345
+        assert account.name == "John Doe"
+        assert account.email == "john@example.com"
+        assert account.username == "jdoe"
+        assert account.status == "ACTIVE"
+
+    def test_gerrit_account_serialization(self, sample_gerrit_account):
+        """Test Gerrit account JSON serialization."""
+        account = sample_gerrit_account
+        json_data = account.model_dump()
+
+        assert json_data["account_id"] == 12345
+        assert json_data["name"] == "John Doe"
+        assert json_data["email"] == "john@example.com"
+        assert json_data["username"] == "jdoe"
+        assert json_data["status"] == "ACTIVE"
+
+
+class TestGerritSSHKeyInfo:
+    """Test GerritSSHKeyInfo model."""
+
+    def test_valid_gerrit_ssh_key(self, sample_gerrit_ssh_key):
+        """Test valid Gerrit SSH key creation."""
+        key = sample_gerrit_ssh_key
+
+        assert key.seq == 1
+        assert key.algorithm == "ssh-ed25519"
+        assert key.comment == "Test Key"
+        assert key.valid is True
+        assert "AAAAC3NzaC1lZDI1NTE5" in key.ssh_public_key
+
+    def test_gerrit_ssh_key_serialization(self, sample_gerrit_ssh_key):
+        """Test Gerrit SSH key JSON serialization."""
+        key = sample_gerrit_ssh_key
+        json_data = key.model_dump()
+
+        assert json_data["seq"] == 1
+        assert json_data["algorithm"] == "ssh-ed25519"
+        assert json_data["valid"] is True
+
+
+class TestGerritGPGKeyInfo:
+    """Test GerritGPGKeyInfo model."""
+
+    def test_valid_gerrit_gpg_key(self, sample_gerrit_gpg_key):
+        """Test valid Gerrit GPG key creation."""
+        key = sample_gerrit_gpg_key
+
+        assert key.id == "ABCD1234EFGH5678"
+        assert key.fingerprint == "1234567890ABCDEF1234567890ABCDEF12345678"
+        assert "John Doe <john@example.com>" in key.user_ids
+        assert key.status == "TRUSTED"
+        assert key.problems == []
+
+    def test_gerrit_gpg_key_serialization(self, sample_gerrit_gpg_key):
+        """Test Gerrit GPG key JSON serialization."""
+        key = sample_gerrit_gpg_key
+        json_data = key.model_dump()
+
+        assert json_data["id"] == "ABCD1234EFGH5678"
+        assert json_data["status"] == "TRUSTED"
+        assert len(json_data["user_ids"]) == 1
+
+
+class TestGerritKeyVerificationResult:
+    """Test KeyVerificationResult with Gerrit service."""
+
+    def test_gerrit_key_verification_success(
+        self, sample_gerrit_key_verification_result
+    ):
+        """Test successful Gerrit key verification result."""
+        result = sample_gerrit_key_verification_result
+
+        assert result.key_registered is True
+        assert result.username == "12345"
+        assert result.service == "gerrit"
+        assert result.server == "gerrit.onap.org"
+        assert result.enumerated is False
+
+    def test_gerrit_key_verification_failed(self):
+        """Test failed Gerrit key verification result."""
+        from tag_validate.models import KeyVerificationResult
+
+        result = KeyVerificationResult(
+            key_registered=False,
+            username="12345",
+            enumerated=False,
+            key_info=None,
+            service="gerrit",
+            server="gerrit.onap.org",
+        )
+
+        assert result.key_registered is False
+        assert result.service == "gerrit"
+        assert result.key_info is None
+
+
+class TestValidationConfigWithGerrit:
+    """Test ValidationConfig with Gerrit fields."""
+
+    def test_gerrit_config_creation(self, sample_gerrit_validation_config):
+        """Test ValidationConfig with Gerrit settings."""
+        config = sample_gerrit_validation_config
+
+        assert config.require_gerrit is True
+        assert config.gerrit_server == "gerrit.onap.org"
+        assert config.require_github is False  # Should be False by default
+
+    def test_combined_github_gerrit_config(self):
+        """Test ValidationConfig with both GitHub and Gerrit."""
+        from tag_validate.models import ValidationConfig
+
+        config = ValidationConfig(
+            require_github=True,
+            require_gerrit=True,
+            gerrit_server="gerrit.onap.org",
+            require_signed=True,
+            allowed_signature_types=["gpg", "ssh"],
+        )
+
+        assert config.require_github is True
+        assert config.require_gerrit is True
+        assert config.gerrit_server == "gerrit.onap.org"
+        assert "gpg" in config.allowed_signature_types
+        assert "ssh" in config.allowed_signature_types
+
+    def test_gerrit_config_serialization(self, sample_gerrit_validation_config):
+        """Test Gerrit config JSON serialization."""
+        config = sample_gerrit_validation_config
+        json_data = config.model_dump()
+
+        assert json_data["require_gerrit"] is True
+        assert json_data["gerrit_server"] == "gerrit.onap.org"
+        assert json_data["require_github"] is False
+
+
+class TestGerritIntegration:
+    """Test Gerrit models integration."""
+
+    def test_complete_gerrit_verification_result(self):
+        """Test complete verification result with Gerrit key info."""
+        from tag_validate.models import (
+            GerritSSHKeyInfo,
+            KeyVerificationResult,
+        )
+
+        ssh_key = GerritSSHKeyInfo(
+            seq=1,
+            ssh_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz",
+            encoded_key="AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz",
+            algorithm="ssh-ed25519",
+            comment="Test Key",
+            valid=True,
+        )
+
+        result = KeyVerificationResult(
+            key_registered=True,
+            username="12345",
+            enumerated=True,
+            key_info=ssh_key,
+            service="gerrit",
+            server="gerrit.onap.org",
+        )
+
+        assert result.key_registered is True
+        assert result.service == "gerrit"
+        assert isinstance(result.key_info, GerritSSHKeyInfo)
+        assert result.key_info.algorithm == "ssh-ed25519"
+        assert result.server == "gerrit.onap.org"
+
+    def test_validation_result_with_gerrit_verification(self):
+        """Test ValidationResult with Gerrit key verification."""
+        from tag_validate.models import (
+            KeyVerificationResult,
+            SignatureInfo,
+            TagInfo,
+            ValidationConfig,
+            ValidationResult,
+            VersionInfo,
+        )
+
+        config = ValidationConfig(
+            require_gerrit=True,
+            gerrit_server="gerrit.onap.org",
+            require_signed=True,
+        )
+
+        key_verification = KeyVerificationResult(
+            key_registered=True,
+            username="12345",
+            enumerated=False,
+            key_info=None,
+            service="gerrit",
+            server="gerrit.onap.org",
+        )
+
+        result = ValidationResult(
+            tag_name="v1.0.0",
+            is_valid=True,
+            config=config,
+            tag_info=TagInfo(
+                tag_name="v1.0.0",
+                tag_type="annotated",
+                commit_sha="abc123",
+                tagger_name="John Doe",
+                tagger_email="john@example.com",
+                tag_date="2024-01-01T12:00:00Z",
+            ),
+            version_info=VersionInfo(
+                raw="v1.0.0",
+                normalized="1.0.0",
+                is_valid=True,
+                version_type="semver",
+                has_prefix=True,
+                is_development=False,
+                major=1,
+                minor=0,
+                patch=0,
+            ),
+            signature_info=SignatureInfo(
+                type="ssh",
+                verified=True,
+                signer_email="john@example.com",
+                fingerprint="SHA256:abc123def456",
+            ),
+            key_verification=key_verification,
+        )
+
+        assert result.is_valid is True
+        assert result.config.require_gerrit is True
+        assert result.key_verification.service == "gerrit"
+        assert result.key_verification.key_registered is True

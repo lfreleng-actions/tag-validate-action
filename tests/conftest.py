@@ -12,6 +12,9 @@ from unittest.mock import Mock
 import pytest
 
 from tag_validate.models import (
+    GerritAccountInfo,
+    GerritGPGKeyInfo,
+    GerritSSHKeyInfo,
     GPGKeyInfo,
     KeyVerificationResult,
     SignatureInfo,
@@ -193,6 +196,23 @@ def sample_validation_config():
 
 
 @pytest.fixture
+def sample_gerrit_validation_config():
+    """
+    Create a sample validation configuration with Gerrit.
+
+    Returns:
+        ValidationConfig: Sample Gerrit configuration
+    """
+    return ValidationConfig(
+        require_signed=True,
+        require_semver=True,
+        require_gerrit=True,
+        gerrit_server="gerrit.onap.org",
+        reject_development=True,
+    )
+
+
+@pytest.fixture
 def sample_key_verification_result():
     """
     Create a sample key verification result.
@@ -203,6 +223,80 @@ def sample_key_verification_result():
     return KeyVerificationResult(
         key_registered=True,
         username="testuser",
+        service="github",
+        enumerated=False,
+        key_info=None,
+    )
+
+
+@pytest.fixture
+def sample_gerrit_account():
+    """
+    Create a sample Gerrit account info.
+
+    Returns:
+        GerritAccountInfo: Sample Gerrit account
+    """
+    return GerritAccountInfo(
+        account_id=12345,
+        name="John Doe",
+        email="john@example.com",
+        username="jdoe",
+        status="ACTIVE",
+    )
+
+
+@pytest.fixture
+def sample_gerrit_ssh_key():
+    """
+    Create a sample Gerrit SSH key info.
+
+    Returns:
+        GerritSSHKeyInfo: Sample Gerrit SSH key
+    """
+    return GerritSSHKeyInfo(
+        seq=1,
+        ssh_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz Test Key",
+        encoded_key="AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz",
+        algorithm="ssh-ed25519",
+        comment="Test Key",
+        valid=True,
+    )
+
+
+@pytest.fixture
+def sample_gerrit_gpg_key():
+    """
+    Create a sample Gerrit GPG key info.
+
+    Returns:
+        GerritGPGKeyInfo: Sample Gerrit GPG key
+    """
+    return GerritGPGKeyInfo(
+        id="ABCD1234EFGH5678",
+        fingerprint="1234567890ABCDEF1234567890ABCDEF12345678",
+        user_ids=["John Doe <john@example.com>"],
+        key="-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+        status="TRUSTED",
+        problems=[],
+    )
+
+
+@pytest.fixture
+def sample_gerrit_key_verification_result():
+    """
+    Create a sample Gerrit key verification result.
+
+    Returns:
+        KeyVerificationResult: Sample Gerrit verification result
+    """
+    return KeyVerificationResult(
+        key_registered=True,
+        username="12345",
+        enumerated=False,
+        key_info=None,
+        service="gerrit",
+        server="gerrit.onap.org",
     )
 
 
@@ -280,6 +374,65 @@ def github_commit_verification_response():
                 "signature": "-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----",
                 "payload": "tree abc123\nparent def456\n...",
             }
+        },
+    }
+
+
+# Gerrit API response fixtures
+@pytest.fixture
+def gerrit_account_response():
+    """Sample Gerrit API response for account lookup."""
+    return [
+        {
+            "_account_id": 12345,
+            "name": "John Doe",
+            "email": "john@example.com",
+            "username": "jdoe",
+            "status": "ACTIVE",
+        }
+    ]
+
+
+@pytest.fixture
+def gerrit_ssh_keys_response():
+    """Sample Gerrit API response for SSH keys."""
+    return [
+        {
+            "seq": 1,
+            "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz Test Key",
+            "encoded_key": "AAAAC3NzaC1lZDI1NTE5AAAAIAbcdefghijklmnopqrstuvwxyz",
+            "algorithm": "ssh-ed25519",
+            "comment": "Test Key",
+            "valid": True,
+        },
+        {
+            "seq": 2,
+            "ssh_public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ... Old Key",
+            "encoded_key": "AAAAB3NzaC1yc2EAAAADAQABAAABAQ...",
+            "algorithm": "ssh-rsa",
+            "comment": "Old Key",
+            "valid": False,
+        },
+    ]
+
+
+@pytest.fixture
+def gerrit_gpg_keys_response():
+    """Sample Gerrit API response for GPG keys."""
+    return {
+        "ABCD1234EFGH5678": {
+            "fingerprint": "1234567890ABCDEF1234567890ABCDEF12345678",
+            "user_ids": ["John Doe <john@example.com>"],
+            "key": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+            "status": "TRUSTED",
+            "problems": [],
+        },
+        "9876FEDC5432BA10": {
+            "fingerprint": "ABCDEF1234567890ABCDEF1234567890ABCDEF12",
+            "user_ids": ["John Doe <john@alt.com>", "J. Doe <j.doe@example.com>"],
+            "key": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+            "status": "EXPIRED",
+            "problems": ["Key expired"],
         },
     }
 

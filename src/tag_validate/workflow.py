@@ -35,6 +35,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from .gerrit_keys import GerritKeysClient, GerritServerError
 from .github_keys import GitHubKeysClient
 from .models import (
     KeyVerificationResult,
@@ -69,20 +70,27 @@ class ValidationWorkflow:
         self,
         config: ValidationConfig,
         repo_path: Optional[Path] = None,
+        gerrit_username: Optional[str] = None,
+        gerrit_password: Optional[str] = None,
     ):
         """Initialize the validation workflow.
 
         Args:
             config: Validation configuration
             repo_path: Path to Git repository (default: current directory)
+            gerrit_username: Gerrit username for HTTP authentication (optional)
+            gerrit_password: Gerrit HTTP password for authentication (optional)
         """
         self.config = config
         self.repo_path = repo_path or Path.cwd()
+        self.gerrit_username = gerrit_username
+        self.gerrit_password = gerrit_password
 
         # Initialize components
-        self.validator = TagValidator()
-        self.detector = SignatureDetector(self.repo_path)
-        self.operations = TagOperations()
+        self.validator: TagValidator = TagValidator()
+        self.detector: SignatureDetector = SignatureDetector(self.repo_path)
+        self.operations: TagOperations = TagOperations()
+        self._current_github_org: Optional[str] = None
 
         logger.debug(f"Initialized ValidationWorkflow with config: {config}")
 
@@ -135,8 +143,12 @@ class ValidationWorkflow:
         # Initialize result
         result = ValidationResult(
             tag_name=tag_name,
-            is_valid=True,  # Will be set to False if any check fails
+            is_valid=True,
             config=self.config,
+            tag_info=None,
+            version_info=None,
+            signature_info=None,
+            key_verification=None,
         )
 
         # Step 1: Fetch tag information
@@ -271,6 +283,93 @@ class ValidationWorkflow:
                         logger.error(error_msg)
             else:
                 result.add_info("Skipping GitHub key verification (no valid signature)")
+
+        # Step 5: Verify key on Gerrit (if requested and signature exists)
+        if self.config.require_gerrit:
+            if signature_info.type in ["gpg", "ssh"] and signature_info.verified:
+                try:
+                    # Determine Gerrit server
+                    gerrit_server = self.config.gerrit_server
+                    github_org = None
+
+                    if not gerrit_server:
+                        # Try to extract GitHub org from current context
+                        github_org = self._extract_github_org_from_context()
+                        if github_org:
+                            gerrit_server = f"gerrit.{github_org}.org"
+                        else:
+                            raise ValueError("No Gerrit server specified and could not auto-detect from GitHub org")
+
+                    # Use require_owners if provided, otherwise verify against tagger email
+                    key_result = await self._require_gerrit_key(
+                        signature_info,
+                        gerrit_server,
+                        github_org,
+                        require_owners,
+                    )
+
+                    # Update or create key verification result
+                    if result.key_verification:
+                        # If we already have GitHub verification, we need to handle both
+                        result.add_info(f"Gerrit key verification: {'verified' if key_result.key_registered else 'failed'}")
+                        if not key_result.key_registered:
+                            result.is_valid = False
+                            result.add_error(f"Signing key not registered on Gerrit server {key_result.server}")
+                        else:
+                            result.add_info(f"Signing key verified on Gerrit server {key_result.server}")
+                    else:
+                        result.key_verification = key_result
+
+                        if not key_result.key_registered:
+                            result.is_valid = False
+                            if require_owners:
+                                result.add_error(
+                                    f"Signing key not registered to any of the required owners on Gerrit: {', '.join(require_owners)}"
+                                )
+                            else:
+                                result.add_error(f"Signing key not registered on Gerrit server {key_result.server}")
+                        else:
+                            if require_owners:
+                                result.add_info(f"Signing key verified for required owner on Gerrit: {key_result.username}")
+                            else:
+                                result.add_info(f"Signing key verified on Gerrit server {key_result.server}")
+
+                except GerritServerError as e:
+                    # API access errors - provide helpful message
+                    error_msg = str(e)
+                    logger.warning(f"Gerrit key verification unavailable: {e}")
+
+                    # Determine if this is an authentication or unsupported-API limitation
+                    lower_msg = error_msg.lower()
+                    auth_error = "403" in error_msg or "requires authentication" in lower_msg
+                    unsupported_error = "404" in error_msg or "not available" in lower_msg
+
+                    if auth_error or unsupported_error:
+                        # Authentication or API support issues should not fail overall validation,
+                        # since Gerrit authentication is optional and some servers may not expose the API
+                        result.add_info(
+                            f"Gerrit key verification skipped due to server limitations: {error_msg}"
+                        )
+                        if auth_error:
+                            result.add_info(
+                                f"Note: Gerrit server '{gerrit_server}' requires authentication to access user keys. "
+                                "Public verification is not available on this server."
+                            )
+                        if unsupported_error:
+                            result.add_info(
+                                f"Note: Gerrit server '{gerrit_server}' does not expose key management APIs. "
+                                "This may be an older version or the feature is disabled."
+                            )
+                    else:
+                        # Other Gerrit server errors remain validation failures
+                        result.is_valid = False
+                        result.add_error(error_msg)
+                except Exception as e:
+                    result.is_valid = False
+                    result.add_error(f"Gerrit key verification failed: {e}")
+                    logger.error(f"Gerrit key verification failed: {e}")
+            else:
+                result.add_info("Skipping Gerrit key verification (no valid signature)")
 
         # Final validation summary
         if result.is_valid:
@@ -611,6 +710,8 @@ class ValidationWorkflow:
                     username=", ".join(require_owners),
                     enumerated=False,
                     key_info=None,
+                    service="github",
+                    server=None,
                 )
         else:
             # Original behavior: verify against single github_user
@@ -641,6 +742,156 @@ class ValidationWorkflow:
 
             logger.debug(f"Key verification result: registered={result.key_registered}")
             return result
+
+    async def _require_gerrit_key(
+        self,
+        signature_info: SignatureInfo,
+        gerrit_server: str,
+        github_org: Optional[str] = None,
+        require_owners: Optional[list[str]] = None,
+    ) -> KeyVerificationResult:
+        """Verify signing key on Gerrit.
+
+        Args:
+            signature_info: Signature information
+            gerrit_server: Gerrit server hostname or URL
+            github_org: GitHub organization name for auto-discovery (optional)
+            require_owners: List of required usernames or emails that must own the signing key
+
+        Returns:
+            KeyVerificationResult: Key verification result
+
+        Raises:
+            Exception: If verification fails
+        """
+        # Determine the tagger email from signature
+        tagger_email = signature_info.signer_email
+        if not tagger_email:
+            raise ValueError("Cannot verify Gerrit key without tagger email")
+
+        logger.debug(f"Verifying key on Gerrit server: {gerrit_server}")
+
+        async with GerritKeysClient(
+            server=gerrit_server,
+            github_org=github_org,
+            username=self.gerrit_username,
+            password=self.gerrit_password,
+        ) as client:
+            # Look up account by email
+            account = await client.lookup_account_by_email(tagger_email)
+            if not account:
+                logger.debug(f"No Gerrit account found for email: {tagger_email}")
+                return KeyVerificationResult(
+                    key_registered=False,
+                    username=tagger_email,
+                    enumerated=True,
+                    key_info=None,
+                    service="gerrit",
+                    server=gerrit_server,
+                )
+
+            # If require_owners is specified, check if account matches any owner
+            if require_owners:
+                logger.debug(f"Verifying account against required owners: {require_owners}")
+                account_matches = False
+
+                for owner in require_owners:
+                    if "@" in owner:
+                        # Owner is an email address
+                        if account.email and account.email.lower() == owner.lower():
+                            account_matches = True
+                            break
+                    else:
+                        # Owner is a username
+                        if account.username and account.username.lower() == owner.lower():
+                            account_matches = True
+                            break
+
+                if not account_matches:
+                    logger.debug(f"Account {account.email} does not match required owners: {require_owners}")
+                    return KeyVerificationResult(
+                        key_registered=False,
+                        username=", ".join(require_owners),
+                        enumerated=False,
+                        key_info=None,
+                        service="gerrit",
+                        server=gerrit_server,
+                    )
+
+            # Verify the key based on signature type
+            if signature_info.type == "gpg":
+                if not signature_info.key_id:
+                    raise ValueError("GPG key ID not found in signature")
+
+                result = await client.verify_gpg_key_registered(
+                    account_id=account.account_id,
+                    key_id=signature_info.key_id,
+                )
+
+            elif signature_info.type == "ssh":
+                if not signature_info.fingerprint:
+                    raise ValueError("SSH fingerprint not found in signature")
+
+                result = await client.verify_ssh_key_registered(
+                    account_id=account.account_id,
+                    fingerprint=signature_info.fingerprint,
+                )
+
+            else:
+                raise ValueError(f"Cannot verify {signature_info.type} signature type")
+
+            logger.debug(f"Gerrit key verification result: registered={result.key_registered}")
+            return result
+
+    def _extract_github_org_from_context(self) -> Optional[str]:
+        """Extract GitHub organization from current validation context.
+
+        This method attempts to determine the GitHub organization from various sources:
+        1. Repository remote URL (if available)
+        2. Current working directory name patterns
+        3. Environment variables
+
+        Returns:
+            GitHub organization name if detected, None otherwise
+        """
+        # First check if we have a stored GitHub org from remote validation
+        if hasattr(self, '_current_github_org') and self._current_github_org:
+            logger.debug(f"Using stored GitHub org from remote validation: {self._current_github_org}")
+            return self._current_github_org
+
+        try:
+            # Try to get remote URL from git repository
+            import subprocess
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                remote_url = result.stdout.strip()
+                logger.debug(f"Found git remote URL: {remote_url}")
+
+                # Parse GitHub URL patterns
+                import re
+                patterns = [
+                    r"github\.com[:/]([^/]+)/",  # https://github.com/owner/ or git@github.com:owner/
+                    r"github\.com/([^/]+)",      # https://github.com/owner (no trailing slash)
+                ]
+
+                for pattern in patterns:
+                    match = re.search(pattern, remote_url)
+                    if match:
+                        org = match.group(1)
+                        logger.debug(f"Extracted GitHub org from remote URL: {org}")
+                        return org
+
+        except Exception as e:
+            logger.debug(f"Could not extract GitHub org from git remote: {e}")
+
+        return None
 
     async def validate_tag_location(
         self,
@@ -714,6 +965,9 @@ class ValidationWorkflow:
                     self.repo_path = temp_dir
                     self.detector = SignatureDetector(temp_dir)
 
+                    # Store GitHub org for Gerrit auto-discovery
+                    self._current_github_org = owner
+
                     # Validate the tag
                     result = await self.validate_tag(tag, github_user, github_token, require_owners)
 
@@ -727,6 +981,8 @@ class ValidationWorkflow:
                     # Clean up temporary directory
                     secure_rmtree(temp_dir)
                     logger.debug(f"Cleaned up temporary directory: {temp_dir}")
+                    # Clear stored org
+                    self._current_github_org = None
 
             except Exception as e:
                 logger.error(f"Failed to validate remote tag: {e}")
@@ -734,6 +990,10 @@ class ValidationWorkflow:
                     tag_name=tag_location,
                     is_valid=False,
                     config=self.config,
+                    tag_info=None,
+                    version_info=None,
+                    signature_info=None,
+                    key_verification=None,
                 )
                 error_msg = f"Failed to validate remote tag: {e}"
                 result.add_error(error_msg)
@@ -787,6 +1047,10 @@ class ValidationWorkflow:
                         tag_name=tag_location,
                         is_valid=False,
                         config=self.config,
+                        tag_info=None,
+                        version_info=None,
+                        signature_info=None,
+                        key_verification=None,
                     )
                     error_msg = f"Failed to validate local tag: {e}"
                     result.add_error(error_msg)
@@ -852,6 +1116,10 @@ class ValidationWorkflow:
                         tag_name=tag_location,
                         is_valid=False,
                         config=self.config,
+                        tag_info=None,
+                        version_info=None,
+                        signature_info=None,
+                        key_verification=None,
                     )
                     error_msg = f"Failed to validate remote tag: {e}"
 
@@ -957,6 +1225,13 @@ class ValidationWorkflow:
             lines.append("Warnings:")
             for warning in result.warnings:
                 lines.append(f"  • {warning}")
+
+        # Info messages
+        if result.info:
+            lines.append("")
+            lines.append("Additional Information:")
+            for info in result.info:
+                lines.append(f"  • {info}")
 
         # Remove trailing empty line if present
         while lines and lines[-1] == "":
