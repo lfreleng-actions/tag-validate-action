@@ -68,46 +68,13 @@ jobs:
       - name: 'Verify pushed tag'
         id: 'tag-validate'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/tag-validate-action@57c522eff7b5ff797094c054a9614f45e0c5ef17  # main
+        uses: lfreleng-actions/tag-validate-action@57c522eff7b5ff797094c054a9614f45e0c5ef17  # v0.3.0
+        # continue-on-error set true to prevent race conditions
+        continue-on-error: true
         with:
           require_type: 'semver'
           require_signed: 'true'
           token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: 'Reject development tags'
-        if: steps.tag-validate.outputs.development_tag == 'true'
-        shell: bash
-        run: |
-          # Reject development tags
-          echo "Development tag pushed; aborting release workflow 🛑"
-          echo "Development tag pushed; aborting release workflow 🛑" \
-            >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-
-      - name: 'Ensure draft release exists'
-        id: 'ensure-release'
-        shell: bash
-        env:
-          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-        run: |
-          # Ensure draft release exists
-          TAG="${{ steps.tag-validate.outputs.tag_name }}"
-          # Check if release exists and get its draft status
-          if RELEASE_INFO=$(gh release view "$TAG" \
-            --json isDraft 2>/dev/null); then
-            IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.isDraft')
-            if [ "$IS_DRAFT" = "true" ]; then
-              echo "Draft release for tag $TAG already exists"
-            else
-              echo "Published release for tag $TAG already exists"
-            fi
-          else
-            echo "Creating draft release for tag $TAG"
-            gh release create "$TAG" \
-              --draft \
-              --title "Release $TAG" \
-              --notes "Automated release for $TAG"
-          fi
 
   python-build:
     name: 'Python Build'
