@@ -30,7 +30,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: "Test SemVer string - valid"
         uses: ./
@@ -151,7 +151,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -214,7 +214,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: "Test remote tag - semantic versioning"
         uses: ./
@@ -305,7 +305,7 @@ jobs:
     steps:
       - name: "Checkout test-tags-semantic repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
@@ -313,7 +313,7 @@ jobs:
 
       - name: "Checkout test-tags-calver repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
@@ -321,7 +321,7 @@ jobs:
 
       - name: "Checkout action repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: action-code
 
@@ -633,7 +633,7 @@ jobs:
     steps:
       - name: "Checkout repository with all tags"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -756,7 +756,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -813,7 +813,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: "Test alpha tag"
         uses: ./
@@ -879,7 +879,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: "Test tag_location takes priority over tag_string"
         uses: ./
@@ -910,7 +910,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: "Test empty tag_string with permit_missing=true"
         uses: ./
@@ -968,7 +968,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: "Set up Python"
         # yamllint disable-line rule:line-length
@@ -1049,7 +1049,7 @@ jobs:
     steps:
       - name: "Checkout test repo (SemVer)"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
@@ -1057,7 +1057,7 @@ jobs:
 
       - name: "Checkout test repo (CalVer)"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
@@ -1065,7 +1065,7 @@ jobs:
 
       - name: "Checkout action code"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           path: action-code
 
@@ -1256,7 +1256,7 @@ jobs:
     steps:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: "Set up Python"
         # yamllint disable-line rule:line-length
