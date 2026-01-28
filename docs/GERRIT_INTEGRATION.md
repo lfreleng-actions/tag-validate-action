@@ -65,14 +65,21 @@ The tool will automatically use these credentials when needed.
 
 #### GitHub Action Secrets
 
-Store credentials in GitHub Secrets and reference them in your workflow:
+Store the password in GitHub Secrets and reference it in your workflow.
+
+> **Important**: Do NOT store `gerrit_username` as a secret. GitHub Actions
+> automatically masks any secret value wherever it appears in logs and outputs.
+> If your authentication username matches the key owner's username (which is
+> common), the username will be redacted from the GitHub Step Summary output
+> as `***`. The password is the sole sensitive credential and should be
+> stored as a secret.
 
 ```yaml
 - name: Check Tag
   uses: lfreleng-actions/tag-validate-action@v1
   with:
     require_gerrit: 'gerrit.onap.org'
-    gerrit_username: ${{ secrets.GERRIT_USERNAME }}
+    gerrit_username: 'your-gerrit-username'  # Plain text, not a secret
     gerrit_password: ${{ secrets.GERRIT_PASSWORD }}
     tag_location: ${{ github.ref_name }}
 ```
@@ -124,7 +131,7 @@ Add the `require_gerrit` input to your workflow:
     require_gerrit: 'gerrit.onap.org'
     require_owner: 'user@linuxfoundation.org'  # Must match both systems
     token: ${{ secrets.GITHUB_TOKEN }}
-    gerrit_username: ${{ secrets.GERRIT_USERNAME }}
+    gerrit_username: 'your-gerrit-username'  # Plain text, not a secret
     gerrit_password: ${{ secrets.GERRIT_PASSWORD }}
     tag_location: ${{ github.ref_name }}
 ```
@@ -375,7 +382,7 @@ jobs:
           require_signed: 'gpg'
           require_gerrit: 'true'  # Auto-discovers gerrit.onap.org
           require_owner: 'maintainer@onap.org'
-          gerrit_username: ${{ secrets.GERRIT_USERNAME }}
+          gerrit_username: 'your-gerrit-username'  # Plain text, not a secret
           gerrit_password: ${{ secrets.GERRIT_PASSWORD }}
           reject_development: true
           tag_location: ${{ github.ref_name }}
@@ -389,7 +396,7 @@ jobs:
   with:
     require_gerrit: 'gerrit.linuxfoundation.org'
     require_owner: 'lead@project.org,maintainer1@company.com'
-    gerrit_username: ${{ secrets.GERRIT_USERNAME }}
+    gerrit_username: 'your-gerrit-username'  # Plain text, not a secret
     gerrit_password: ${{ secrets.GERRIT_PASSWORD }}
     tag_location: ${{ github.ref_name }}
 ```
@@ -420,7 +427,7 @@ If you have existing workflows that use GitHub verification:
     require_gerrit: 'gerrit.company.org'
     require_owner: 'developer@company.com'  # Must exist in both systems
     token: ${{ secrets.GITHUB_TOKEN }}
-    gerrit_username: ${{ secrets.GERRIT_USERNAME }}
+    gerrit_username: 'your-gerrit-username'  # Plain text, not a secret
     gerrit_password: ${{ secrets.GERRIT_PASSWORD }}
     tag_location: ${{ github.ref_name }}
 ```
