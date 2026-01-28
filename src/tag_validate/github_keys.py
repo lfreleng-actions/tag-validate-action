@@ -76,6 +76,20 @@ class GitHubKeysClient:
         self.logger = logger_instance or logger
         self._client: GitHubAsync | None = None
 
+        # Extract server hostname from api_url (e.g., "api.github.com" -> "github.com")
+        # For GitHub.com, use "github.com", for GHE use the hostname
+        if "api.github.com" in api_url:
+            self.server = "github.com"
+        else:
+            # Extract hostname from URL for GitHub Enterprise
+            from urllib.parse import urlparse
+            parsed = urlparse(api_url)
+            # Remove 'api.' prefix if present (e.g., api.github.example.com -> github.example.com)
+            hostname = parsed.netloc
+            if hostname.startswith("api."):
+                hostname = hostname[4:]
+            self.server = hostname
+
     async def __aenter__(self) -> "GitHubKeysClient":
         """Async context manager entry."""
         self._client = GitHubAsync(
@@ -257,6 +271,7 @@ class GitHubKeysClient:
         key_id: str,
         tagger_email: str | None = None,
         check_subkeys: bool = True,
+        signer_email: str | None = None,
     ) -> KeyVerificationResult:
         """
         Verify if a specific GPG key is registered to a GitHub user.
@@ -269,6 +284,7 @@ class GitHubKeysClient:
             key_id: GPG key ID to verify (e.g., "3262EFF25BA0D270").
             tagger_email: Optional email to verify against key emails.
             check_subkeys: Whether to check subkeys in addition to primary keys (default: True).
+            signer_email: Email from the tag signature (used when GitHub API doesn't provide user email).
 
         Returns:
             KeyVerificationResult with verification details.
@@ -283,6 +299,9 @@ class GitHubKeysClient:
         self.logger.debug(f"Verifying GPG key {key_id} for user {username}")
 
         try:
+            # Fetch user details
+            user_details = await self.get_user_details(username)
+
             user_keys = await self.get_user_gpg_keys(username)
 
             # Normalize key_id for comparison (remove spaces, make uppercase)
@@ -296,6 +315,10 @@ class GitHubKeysClient:
                         username=username,
                         enumerated=False,
                         key_info=key,
+                        service="github",
+                        server=self.server,
+                        user_name=user_details.get("name") if user_details else None,
+                        user_email=signer_email or user_details.get("email") if user_details else None,
                     )
 
                 # Check subkeys if enabled
@@ -310,6 +333,10 @@ class GitHubKeysClient:
                                 username=username,
                                 enumerated=False,
                                 key_info=key,  # Return the primary key info, not the subkey
+                                service="github",
+                                server=self.server,
+                                user_name=user_details.get("name") if user_details else None,
+                                user_email=signer_email or user_details.get("email") if user_details else None,
                             )
 
             # Key not found
@@ -319,6 +346,10 @@ class GitHubKeysClient:
                 username=username,
                 enumerated=False,
                 key_info=None,
+                service="github",
+                server=self.server,
+                user_name=user_details.get("name") if user_details else None,
+                user_email=signer_email or user_details.get("email") if user_details else None,
             )
 
         except Exception as e:
@@ -329,6 +360,7 @@ class GitHubKeysClient:
         self,
         username: str,
         public_key_fingerprint: str,
+        signer_email: str | None = None,
     ) -> KeyVerificationResult:
         """
         Verify if a specific SSH key is registered to a GitHub user.
@@ -339,6 +371,7 @@ class GitHubKeysClient:
         Args:
             username: GitHub username to check.
             public_key_fingerprint: SSH key fingerprint or public key data to verify.
+            signer_email: Email from the tag signature (used when GitHub API doesn't provide user email).
 
         Returns:
             KeyVerificationResult with verification details.
@@ -353,6 +386,9 @@ class GitHubKeysClient:
         self.logger.debug(f"Verifying SSH key for user {username}")
 
         try:
+            # Fetch user details
+            user_details = await self.get_user_details(username)
+
             user_keys = await self.get_user_ssh_keys(username)
 
             # Normalize fingerprint for comparison
@@ -371,6 +407,10 @@ class GitHubKeysClient:
                             username=username,
                             enumerated=False,
                             key_info=key,
+                            service="github",
+                            server=self.server,
+                            user_name=user_details.get("name") if user_details else None,
+                            user_email=signer_email or user_details.get("email") if user_details else None,
                         )
                 else:
                     # Direct key comparison (if full public key provided)
@@ -380,6 +420,10 @@ class GitHubKeysClient:
                             username=username,
                             enumerated=False,
                             key_info=key,
+                            service="github",
+                            server=self.server,
+                            user_name=user_details.get("name") if user_details else None,
+                            user_email=signer_email or user_details.get("email") if user_details else None,
                         )
 
             # Key not found
@@ -389,6 +433,10 @@ class GitHubKeysClient:
                 username=username,
                 enumerated=False,
                 key_info=None,
+                service="github",
+                server=self.server,
+                user_name=user_details.get("name") if user_details else None,
+                user_email=signer_email or user_details.get("email") if user_details else None,
             )
 
         except Exception as e:
@@ -436,6 +484,43 @@ class GitHubKeysClient:
 
         except Exception as e:
             self.logger.debug(f"Failed to calculate SSH fingerprint: {e}")
+            return None
+
+    async def get_user_details(self, username: str) -> dict | None:
+        """
+        Get detailed user information from GitHub.
+
+        Args:
+            username: GitHub username
+
+        Returns:
+            Dictionary with user details (login, name, email, etc.)
+            or None if user not found
+
+        Raises:
+            GitHubKeysError: If API request fails
+        """
+        client = self._ensure_client()
+
+        try:
+            # Get user details from GitHub API
+            response = await client.get(f"/users/{username}")
+
+            if not isinstance(response, dict):
+                self.logger.debug(f"Unexpected response type for user details: {type(response)}")
+                return None
+
+            return {
+                "login": response.get("login"),
+                "name": response.get("name"),
+                "email": response.get("email"),
+                "bio": response.get("bio"),
+                "company": response.get("company"),
+                "location": response.get("location"),
+            }
+
+        except Exception as e:
+            self.logger.debug(f"Error getting user details for {username}: {e}")
             return None
 
     async def lookup_username_by_email(self, email: str) -> str | None:

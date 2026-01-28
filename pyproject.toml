@@ -45,6 +45,7 @@ dependencies = [
   "python-gnupg>=0.5.3",      # GPG signature parsing
   "cryptography>=46.0.3",     # SSH key parsing and crypto operations
   "packaging>=24.2",          # Version parsing utilities
+  "pygerrit2>=2.0.15",        # Gerrit REST API client
 ]
 
 [project.urls]
@@ -160,10 +161,18 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
-ignore_missing_imports = true
+ignore_missing_imports = false
 strict_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+
+# Ignore missing imports for specific packages without type stubs
+[[tool.mypy.overrides]]
+module = [
+    "pygerrit2.*",
+    "gnupg.*",
+]
+ignore_missing_imports = true
 
 [tool.black]
 line-length = 88

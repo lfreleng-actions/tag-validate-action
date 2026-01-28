@@ -348,6 +348,7 @@ class TestRequireOwnerWorkflow:
             username="octocat",
             key_id="ABC123",
             tagger_email="user@example.com",
+            signer_email="user@example.com",
         )
 
     @pytest.mark.asyncio
@@ -390,6 +391,7 @@ class TestRequireOwnerWorkflow:
         mock_github_client.verify_ssh_key_registered.assert_called_once_with(
             username="octocat",
             public_key_fingerprint="SHA256:abc123",
+            signer_email="user@example.com",
         )
 
     @pytest.mark.asyncio

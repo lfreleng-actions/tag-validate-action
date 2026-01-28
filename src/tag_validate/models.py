@@ -74,6 +74,38 @@ class SSHKeyInfo(BaseModel):
     created_at: str = Field(..., description="ISO 8601 timestamp when key was added to GitHub")
 
 
+class GerritAccountInfo(BaseModel):
+    """Information about a Gerrit account."""
+
+    account_id: int = Field(..., description="Gerrit account ID")
+    name: Optional[str] = Field(None, description="Account display name")
+    email: Optional[str] = Field(None, description="Primary email address")
+    username: Optional[str] = Field(None, description="Username")
+    status: str = Field(..., description="Account status")
+
+
+class GerritSSHKeyInfo(BaseModel):
+    """Information about an SSH key from Gerrit's API."""
+
+    seq: int = Field(..., description="Sequence number of the key")
+    ssh_public_key: str = Field(..., description="SSH public key data")
+    encoded_key: str = Field(..., description="Base64 encoded key")
+    algorithm: str = Field(..., description="Key algorithm (e.g., ssh-rsa, ssh-ed25519)")
+    comment: Optional[str] = Field(None, description="Key comment")
+    valid: bool = Field(..., description="Whether the key is valid")
+
+
+class GerritGPGKeyInfo(BaseModel):
+    """Information about a GPG key from Gerrit's API."""
+
+    id: str = Field(..., description="GPG key ID (short identifier)")
+    fingerprint: str = Field(..., description="Full key fingerprint")
+    user_ids: list[str] = Field(default_factory=list, description="List of user IDs")
+    key: str = Field(..., description="ASCII-armored public key")
+    status: str = Field(..., description="Key status")
+    problems: list[str] = Field(default_factory=list, description="Any problems with the key")
+
+
 class GitHubVerificationInfo(BaseModel):
     """GitHub's verification information from the commits API."""
 
@@ -84,18 +116,22 @@ class GitHubVerificationInfo(BaseModel):
 
 
 class KeyVerificationResult(BaseModel):
-    """Result of verifying a key against GitHub's registry."""
+    """Result of verifying a key against GitHub's or Gerrit's registry."""
 
     key_registered: bool = Field(
-        False, description="Whether the key is registered on GitHub"
+        False, description="Whether the key is registered on the service"
     )
-    username: str = Field(..., description="GitHub username checked")
+    username: str = Field(..., description="Username checked")
     enumerated: bool = Field(
         False, description="Whether the username was auto-detected from email"
     )
-    key_info: Optional[GPGKeyInfo | SSHKeyInfo] = Field(
-        None, description="Full key information from GitHub API if found"
+    key_info: Optional[GPGKeyInfo | SSHKeyInfo | GerritGPGKeyInfo | GerritSSHKeyInfo] = Field(
+        None, description="Full key information from API if found"
     )
+    service: str = Field("github", description="Service that was checked (github or gerrit)")
+    server: Optional[str] = Field(None, description="Server hostname for Gerrit")
+    user_name: Optional[str] = Field(None, description="User's display name")
+    user_email: Optional[str] = Field(None, description="User's email address")
 
 
 class VersionInfo(BaseModel):
@@ -146,6 +182,10 @@ class ValidationConfig(BaseModel):
     # GitHub verification
     require_github: bool = Field(False, description="Verify signing key on GitHub")
 
+    # Gerrit verification
+    require_gerrit: bool = Field(False, description="Verify signing key on Gerrit")
+    gerrit_server: Optional[str] = Field(None, description="Gerrit server hostname or URL")
+
     # Version filtering
     reject_development: bool = Field(False, description="Reject development versions")
     allow_prefix: bool = Field(True, description="Allow 'v' prefix on versions")
@@ -165,7 +205,10 @@ class ValidationResult(BaseModel):
     version_info: Optional[VersionInfo] = Field(None, description="Version validation result")
     signature_info: Optional[SignatureInfo] = Field(None, description="Signature information")
     key_verification: Optional[KeyVerificationResult] = Field(
-        None, description="GitHub key verification result"
+        None, description="Key verification result (GitHub or Gerrit) - deprecated, use key_verifications"
+    )
+    key_verifications: list[KeyVerificationResult] = Field(
+        default_factory=list, description="List of key verification results (GitHub and/or Gerrit)"
     )
 
     # Validation configuration used
