@@ -21,7 +21,7 @@ import base64
 import hashlib
 import logging
 import os
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth, Anonymous
 from requests.exceptions import HTTPError
@@ -45,7 +45,32 @@ class GerritKeysError(Exception):
 class GerritServerError(Exception):
     """Raised when Gerrit server communication fails."""
 
+    def __init__(self, message: str, status_code: int | None = None):
+        """Initialize with message and optional HTTP status code."""
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GerritAuthError(GerritServerError):
+    """Raised when Gerrit authentication fails (401 or 403)."""
+
     pass
+
+
+class GerritMissingCredentialsError(GerritAuthError):
+    """Raised when credentials are required but not provided (401)."""
+
+    def __init__(self, message: str):
+        """Initialize with 401 status code."""
+        super().__init__(message, status_code=401)
+
+
+class GerritInvalidCredentialsError(GerritAuthError):
+    """Raised when provided credentials are invalid (403)."""
+
+    def __init__(self, message: str):
+        """Initialize with 403 status code."""
+        super().__init__(message, status_code=403)
 
 
 class GerritKeysClient:
@@ -91,6 +116,12 @@ class GerritKeysClient:
             timeout: Request timeout in seconds.
             logger_instance: Optional logger instance for client messages.
 
+        Security Note:
+            Credentials (password) are stored in memory only for the duration
+            of operations and are never logged or included in error messages.
+            The password is masked in string representations to prevent
+            accidental exposure in debugging output.
+
         Raises:
             GerritKeysError: If neither server nor github_org is provided.
         """
@@ -117,6 +148,19 @@ class GerritKeysClient:
 
         self._rest: Optional[GerritRestAPI] = None
         self._base_url: str = ""
+
+    def __repr__(self) -> str:
+        """Return string representation with masked credentials.
+
+        Security: Password is never exposed in string representation.
+        """
+        password_status = "set" if self.password else "not set"
+        username_display = repr(self.username) if self.username else "None"
+        return (
+            f"GerritKeysClient(server={self.server!r}, "
+            f"username={username_display}, "
+            f"password=***{password_status}***)"
+        )
 
     async def __aenter__(self) -> "GerritKeysClient":
         """Async context manager entry."""
@@ -269,6 +313,9 @@ class GerritKeysClient:
         """
         rest = self._ensure_client()
 
+        # Check if credentials were provided
+        has_credentials = bool(self.username and self.password)
+
         try:
             # Try to get the server version - this requires authentication
             # and is a lightweight check
@@ -286,16 +333,25 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                return (
-                    False,
-                    f"Authentication required for Gerrit server '{self.server}'. "
-                    f"Please provide credentials via --gerrit-username and --gerrit-password options."
-                )
+                if has_credentials:
+                    # Credentials were provided but rejected (possibly invalid)
+                    return (
+                        False,
+                        f"Invalid credentials: Gerrit server '{self.server}' rejected the provided credentials. "
+                        f"The username or password may be incorrect."
+                    )
+                else:
+                    # No credentials provided
+                    return (
+                        False,
+                        f"Credentials required: Gerrit server '{self.server}' requires authentication. "
+                        f"No username or password provided."
+                    )
             elif status_code == 403:
                 return (
                     False,
-                    f"Authentication failed for Gerrit server '{self.server}'. "
-                    f"Please verify your Gerrit credentials are correct."
+                    f"Invalid credentials: Authentication failed for Gerrit server '{self.server}'. "
+                    f"The provided username or password is incorrect."
                 )
             else:
                 return (
@@ -347,13 +403,13 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                raise GerritServerError(
-                    f"Authentication required to access account {account_id}. "
-                    f"Please provide valid Gerrit credentials."
+                raise GerritMissingCredentialsError(
+                    f"Credentials required to access account {account_id}. "
+                    f"Please provide Gerrit username and password."
                 )
             elif status_code == 403:
-                raise GerritServerError(
-                    f"Authentication failed or insufficient permissions to access account {account_id}."
+                raise GerritInvalidCredentialsError(
+                    f"Invalid credentials or insufficient permissions to access account {account_id}."
                 )
             elif status_code == 404:
                 # 404 for account details just means account not found, return None
@@ -407,13 +463,13 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                raise GerritServerError(
-                    f"Authentication required to search for account by email. "
-                    f"Please provide valid Gerrit credentials."
+                raise GerritMissingCredentialsError(
+                    f"Credentials required to search for account by email. "
+                    f"Please provide Gerrit username and password."
                 )
             elif status_code == 403:
-                raise GerritServerError(
-                    f"Authentication failed or insufficient permissions to search accounts."
+                raise GerritInvalidCredentialsError(
+                    f"Invalid credentials or insufficient permissions to search accounts."
                 )
             else:
                 self.logger.error(
@@ -462,13 +518,13 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                raise GerritServerError(
-                    f"Authentication required to search for account by username. "
-                    f"Please provide valid Gerrit credentials."
+                raise GerritMissingCredentialsError(
+                    f"Credentials required to search for account by username. "
+                    f"Please provide Gerrit username and password."
                 )
             elif status_code == 403:
-                raise GerritServerError(
-                    f"Authentication failed or insufficient permissions to search accounts."
+                raise GerritInvalidCredentialsError(
+                    f"Invalid credentials or insufficient permissions to search accounts."
                 )
             else:
                 self.logger.error(
@@ -536,16 +592,14 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                raise GerritServerError(
+                raise GerritMissingCredentialsError(
                     f"Cannot access SSH keys for account {account_id}: "
-                    f"Authentication required. Please provide valid Gerrit credentials "
-                    f"via --gerrit-username and --gerrit-password options."
+                    f"Credentials required. Please provide Gerrit username and password."
                 )
             elif status_code == 403:
-                raise GerritServerError(
+                raise GerritInvalidCredentialsError(
                     f"Cannot access SSH keys for account {account_id}: "
-                    f"Authentication failed or insufficient permissions. "
-                    f"Please verify your Gerrit credentials."
+                    f"Invalid credentials or insufficient permissions."
                 )
             elif status_code == 404:
                 raise GerritServerError(
@@ -621,16 +675,14 @@ class GerritKeysClient:
             status_code = getattr(e.response, "status_code", None)
 
             if status_code == 401:
-                raise GerritServerError(
+                raise GerritMissingCredentialsError(
                     f"Cannot access GPG keys for account {account_id}: "
-                    f"Authentication required. Please provide valid Gerrit credentials "
-                    f"via --gerrit-username and --gerrit-password options."
+                    f"Credentials required. Please provide Gerrit username and password."
                 )
             elif status_code == 403:
-                raise GerritServerError(
+                raise GerritInvalidCredentialsError(
                     f"Cannot access GPG keys for account {account_id}: "
-                    f"Authentication failed or insufficient permissions. "
-                    f"Please verify your Gerrit credentials."
+                    f"Invalid credentials or insufficient permissions."
                 )
             elif status_code == 404:
                 raise GerritServerError(
@@ -688,7 +740,7 @@ class GerritKeysClient:
                         return KeyVerificationResult(
                             key_registered=True,
                             username=account.username if account else str(account_id),
-                            enumerated=False,
+                            user_enumerated=False,
                             key_info=key,
                             service="gerrit",
                             server=self.server,
@@ -699,7 +751,7 @@ class GerritKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=account.username if account else str(account_id),
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="gerrit",
                 server=self.server,
@@ -716,7 +768,7 @@ class GerritKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=str(account_id),
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="gerrit",
                 server=self.server,
@@ -754,7 +806,7 @@ class GerritKeysClient:
                     return KeyVerificationResult(
                         key_registered=True,
                         username=account.username if account else str(account_id),
-                        enumerated=False,
+                        user_enumerated=False,
                         key_info=key,
                         service="gerrit",
                         server=self.server,
@@ -764,7 +816,7 @@ class GerritKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=account.username if account else str(account_id),
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="gerrit",
                 server=self.server,
@@ -781,7 +833,7 @@ class GerritKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=str(account_id),
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="gerrit",
                 server=self.server,

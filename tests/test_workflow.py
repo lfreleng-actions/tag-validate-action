@@ -211,7 +211,8 @@ class TestValidationWorkflow:
             )
 
             assert result.is_valid is True
-            assert result.key_verification == mock_key_result
+            assert len(result.key_verifications) == 1
+            assert result.key_verifications[0] == mock_key_result
 
     @pytest.mark.asyncio
     async def test_validate_tag_github_key_not_registered(self):
@@ -655,10 +656,18 @@ class TestValidationWorkflow:
             key_id="12345",
         )
 
+        # Mock tag info
+        mock_tag_info = TagInfo(
+            tag_name="v1.2.3",
+            tag_type="annotated",
+            commit_sha="abc123" * 7,
+            tagger_email="test@example.com",
+        )
+
         with patch.object(
             workflow.detector, "detect_signature", return_value=mock_signature
         ) as mock_detect:
-            result = await workflow._detect_signature("v1.2.3")
+            result = await workflow._detect_signature("v1.2.3", mock_tag_info)
 
             assert result == mock_signature
             mock_detect.assert_called_once_with("v1.2.3")

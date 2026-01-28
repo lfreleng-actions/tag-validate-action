@@ -23,6 +23,7 @@ from rich.logging import RichHandler
 from . import __version__
 from .gerrit_keys import GerritKeysClient
 from .github_keys import GitHubKeysClient
+from .github_summary import write_validation_summary
 from .models import KeyVerificationResult, ValidationConfig
 from .signature import SignatureDetector, SignatureDetectionError
 from .validation import TagValidator
@@ -35,6 +36,8 @@ EXIT_VALIDATION_FAILED = 1
 EXIT_MISSING_TOKEN = 2
 EXIT_INVALID_INPUT = 3
 EXIT_UNEXPECTED_ERROR = 4
+EXIT_MISSING_CREDENTIALS = 5  # Required credentials not provided (Gerrit)
+EXIT_AUTH_FAILED = 6  # Authentication failed (invalid credentials)
 
 
 class CustomTyper(typer.Typer):
@@ -699,7 +702,7 @@ def verify_gerrit(
                                 error_msg = f"Gerrit account not found for '{owner}'"
                                 console.print(f"[red]❌ {error_msg}[/red]")
                                 raise typer.Exit(EXIT_INVALID_INPUT)
-                        except Exception as e:
+                        except Exception:
                             error_msg = f"Failed to find Gerrit account for '{owner}'"
                             console.print(f"[red]❌ {error_msg}[/red]")
                             raise typer.Exit(EXIT_INVALID_INPUT)
@@ -1328,6 +1331,11 @@ def validate(
         "-j",
         help="Output results as JSON",
     ),
+    json_file: Optional[Path] = typer.Option(
+        None,
+        "--json-file",
+        help="Write JSON output to file while showing rich console output",
+    ),
 ):
     """
     Validate a version string against SemVer or CalVer patterns.
@@ -1496,6 +1504,47 @@ def validate(
         else:
             _display_version_info(result, version_string)
 
+        # Write JSON to file if requested
+        if json_file and not json_output:
+            import json as json_module
+            output = {
+                "success": result.is_valid,
+                "version": result.raw,
+                "detected_type": result.version_type,
+                "is_development": result.is_development,
+                "has_prefix": result.has_prefix,
+                "version_prefix": result.has_prefix,
+            }
+
+            # Add type-specific fields
+            if result.version_type == "semver":
+                output.update({
+                    "major": result.major,
+                    "minor": result.minor,
+                    "patch": result.patch,
+                    "prerelease": result.prerelease,
+                    "build_metadata": result.build_metadata,
+                })
+            elif result.version_type == "calver":
+                output.update({
+                    "year": result.year,
+                    "month": result.month,
+                    "day": result.day,
+                    "micro": result.micro,
+                    "modifier": result.modifier,
+                })
+
+            if not result.is_valid:
+                output["errors"] = result.errors
+
+            # Write to file
+            try:
+                json_file.parent.mkdir(parents=True, exist_ok=True)
+                with json_file.open('w', encoding='utf-8') as f:
+                    json_module.dump(output, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"Failed to write JSON to file {json_file}: {e}")
+
         # Exit with appropriate code
         if result.is_valid:
             raise typer.Exit(0)
@@ -1601,6 +1650,16 @@ def verify(
         "--json",
         "-j",
         help="Output results as JSON",
+    ),
+    json_file: Optional[Path] = typer.Option(
+        None,
+        "--json-file",
+        help="Write JSON output to file while showing rich console output",
+    ),
+    github_step_summary: bool = typer.Option(
+        True,
+        "--github-step-summary/--no-github-step-summary",
+        help="Write validation summary to GITHUB_STEP_SUMMARY (only in GitHub Actions)",
     ),
 ):
     """
@@ -1798,25 +1857,37 @@ def verify(
             except Exception as e:
                 # Handle missing tag with permit_missing flag
                 if permit_missing and _is_tag_not_found_error(str(e)):
+                    output = {
+                        "success": True,
+                        "tag_name": normalized_location,
+                        "version_type": "other",
+                        "signature_type": "unsigned",
+                        "signature_verified": False,
+                        "key_registered": None,
+                        "is_development": False,
+                        "development_tag": False,
+                        "has_prefix": False,
+                        "version_prefix": False,
+                        "errors": [],
+                        "warnings": ["Tag not found but permit_missing=true"],
+                        "info": ["Tag was not found"],
+                    }
+
                     if json_output:
-                        output = {
-                            "success": True,
-                            "tag_name": normalized_location,
-                            "version_type": "other",
-                            "signature_type": "unsigned",
-                            "signature_verified": False,
-                            "key_registered": None,
-                            "is_development": False,
-                            "development_tag": False,
-                            "has_prefix": False,
-                            "version_prefix": False,
-                            "errors": [],
-                            "warnings": ["Tag not found but permit_missing=true"],
-                            "info": ["Tag was not found"],
-                        }
                         console.print_json(data=output)
                     else:
                         console.print("\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]")
+
+                    # Write JSON to file if requested
+                    if json_file:
+                        import json as json_module
+                        try:
+                            json_file.parent.mkdir(parents=True, exist_ok=True)
+                            with json_file.open('w', encoding='utf-8') as f:
+                                json_module.dump(output, f, indent=2, ensure_ascii=False)
+                        except Exception as file_error:
+                            logger.error(f"Failed to write JSON to file {json_file}: {file_error}")
+
                     raise typer.Exit(0)
                 else:
                     # Re-raise if not a missing tag error or permit_missing is false
@@ -1827,25 +1898,37 @@ def verify(
                 # Check if the errors indicate a missing tag
                 error_text = " ".join(result.errors)
                 if _is_tag_not_found_error(error_text):
+                    output = {
+                        "success": True,
+                        "tag_name": normalized_location,
+                        "version_type": "other",
+                        "signature_type": "unsigned",
+                        "signature_verified": False,
+                        "key_registered": None,
+                        "is_development": False,
+                        "development_tag": False,
+                        "has_prefix": False,
+                        "version_prefix": False,
+                        "errors": [],
+                        "warnings": ["Tag not found but permit_missing=true"],
+                        "info": ["Tag was not found"],
+                    }
+
                     if json_output:
-                        output = {
-                            "success": True,
-                            "tag_name": normalized_location,
-                            "version_type": "other",
-                            "signature_type": "unsigned",
-                            "signature_verified": False,
-                            "key_registered": None,
-                            "is_development": False,
-                            "development_tag": False,
-                            "has_prefix": False,
-                            "version_prefix": False,
-                            "errors": [],
-                            "warnings": ["Tag not found but permit_missing=true"],
-                            "info": ["Tag was not found"],
-                        }
                         console.print_json(data=output)
                     else:
                         console.print("\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]")
+
+                    # Write JSON to file if requested
+                    if json_file:
+                        import json as json_module
+                        try:
+                            json_file.parent.mkdir(parents=True, exist_ok=True)
+                            with json_file.open('w', encoding='utf-8') as f:
+                                json_module.dump(output, f, indent=2, ensure_ascii=False)
+                        except Exception as file_error:
+                            logger.error(f"Failed to write JSON to file {json_file}: {file_error}")
+
                     raise typer.Exit(0)
 
             # Output results
@@ -1911,13 +1994,96 @@ def verify(
             else:
                 _display_validation_result(result, workflow)
 
+            # Write JSON to file if requested
+            if json_file:
+                import json as json_module
+                output = {
+                    "success": result.is_valid,
+                    "tag_name": result.tag_name,
+                    "version_type": result.version_info.version_type if result.version_info else None,
+                    "signature_type": result.signature_info.type if result.signature_info else None,
+                    "signature_verified": result.signature_info.verified if result.signature_info else None,
+                    "key_registered": result.key_verifications[0].key_registered if result.key_verifications else None,
+                    "development_tag": result.version_info.is_development if result.version_info else False,
+                    "version_prefix": result.version_info.has_prefix if result.version_info else False,
+                    "errors": result.errors,
+                    "warnings": result.warnings,
+                    "info": result.info,
+                }
+
+                # Add signature details if available
+                if result.signature_info:
+                    output["signature_details"] = {
+                        "signer_email": result.signature_info.signer_email,
+                        "key_id": result.signature_info.key_id,
+                        "fingerprint": result.signature_info.fingerprint,
+                    }
+
+                # Add version details if available
+                if result.version_info:
+                    output["version_details"] = {
+                        "raw": result.version_info.raw,
+                        "normalized": result.version_info.normalized,
+                    }
+                    if result.version_info.version_type == "semver":
+                        output["version_details"]["semver"] = {
+                            "major": result.version_info.major,
+                            "minor": result.version_info.minor,
+                            "patch": result.version_info.patch,
+                            "prerelease": result.version_info.prerelease,
+                            "build_metadata": result.version_info.build_metadata,
+                        }
+                    elif result.version_info.version_type == "calver":
+                        output["version_details"]["calver"] = {
+                            "year": result.version_info.year,
+                            "month": result.version_info.month,
+                            "day": result.version_info.day,
+                            "micro": result.version_info.micro,
+                        }
+
+                # Add key verifications (GitHub and/or Gerrit)
+                if result.key_verifications:
+                    output["key_verifications"] = []
+                    for k in result.key_verifications:
+                        verification = {
+                            "service": k.service,
+                            "server": k.server,
+                            "key_registered": k.key_registered,
+                            "username": k.username,
+                            "user_email": k.user_email,
+                            "user_name": k.user_name,
+                            "user_enumerated": k.user_enumerated,
+                        }
+                        output["key_verifications"].append(verification)
+
+                # Write to file
+                try:
+                    json_file.parent.mkdir(parents=True, exist_ok=True)
+                    with json_file.open('w', encoding='utf-8') as f:
+                        json_module.dump(output, f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    logger.error(f"Failed to write JSON to file {json_file}: {e}")
+
+            # Write GitHub step summary if enabled and in GitHub Actions
+            if github_step_summary and not json_output:
+                write_validation_summary(result, tag_location)
+
             # Exit with appropriate code
             if result.is_valid:
                 raise typer.Exit(EXIT_SUCCESS)
             else:
-                # Check if it's a missing token error
-                if any("token" in msg.lower() for msg in result.errors):
+                # Check for specific error types and return appropriate exit codes
+                error_messages = " ".join(result.errors).lower()
+
+                # Check for missing GitHub token
+                if "token" in error_messages and "github" in error_messages:
                     raise typer.Exit(EXIT_MISSING_TOKEN)
+                # Check for missing Gerrit credentials
+                elif "credentials not provided" in error_messages or "credentials required" in error_messages:
+                    raise typer.Exit(EXIT_MISSING_CREDENTIALS)
+                # Check for invalid Gerrit credentials
+                elif "authentication failed" in error_messages or "invalid credentials" in error_messages:
+                    raise typer.Exit(EXIT_AUTH_FAILED)
                 else:
                     raise typer.Exit(EXIT_VALIDATION_FAILED)
 

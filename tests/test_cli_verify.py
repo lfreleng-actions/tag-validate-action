@@ -336,10 +336,11 @@ class TestGerritVerification:
         mock_result.config = Mock()
         mock_result.config.require_gerrit = True
         mock_result.config.gerrit_server = None
-        mock_result.key_verification = Mock()
-        mock_result.key_verification.service = "gerrit"
-        mock_result.key_verification.server = "gerrit.onap.org"
-        mock_result.key_verification.key_registered = True
+        mock_key_verification = Mock()
+        mock_key_verification.service = "gerrit"
+        mock_key_verification.server = "gerrit.onap.org"
+        mock_key_verification.key_registered = True
+        mock_result.key_verifications = [mock_key_verification]
         mock_result.errors = []
         mock_result.warnings = []
         mock_result.info = ["Signing key verified on Gerrit server gerrit.onap.org"]
@@ -377,7 +378,7 @@ class TestGerritVerification:
         mock_result.errors = []
         mock_result.warnings = []
         mock_result.info = []
-        mock_result.key_verification = None
+        mock_result.key_verifications = []
         mock_result.signature_info = Mock()
         mock_result.signature_info.type = "unsigned"
         mock_result.version_info = Mock()
@@ -413,7 +414,7 @@ class TestGerritVerification:
         mock_result.errors = []
         mock_result.warnings = []
         mock_result.info = []
-        mock_result.key_verification = None
+        mock_result.key_verifications = []
         mock_result.signature_info = Mock()
         mock_result.signature_info.type = "unsigned"
         mock_result.version_info = Mock()
@@ -452,10 +453,11 @@ class TestGerritVerification:
             "Signing key verified for GitHub user @johndoe",
             "Signing key verified on Gerrit server gerrit.onap.org",
         ]
-        mock_result.key_verification = Mock()
-        mock_result.key_verification.service = "github"
-        mock_result.key_verification.username = "johndoe"
-        mock_result.key_verification.key_registered = True
+        mock_key_verification = Mock()
+        mock_key_verification.service = "github"
+        mock_key_verification.username = "johndoe"
+        mock_key_verification.key_registered = True
+        mock_result.key_verifications = [mock_key_verification]
         mock_result.signature_info = Mock()
         mock_result.signature_info.type = "gpg"
         mock_result.version_info = Mock()
@@ -506,10 +508,11 @@ class TestGerritVerification:
         ]
         mock_result.warnings = []
         mock_result.info = []
-        mock_result.key_verification = Mock()
-        mock_result.key_verification.service = "gerrit"
-        mock_result.key_verification.server = "gerrit.onap.org"
-        mock_result.key_verification.key_registered = False
+        mock_key_verification = Mock()
+        mock_key_verification.service = "gerrit"
+        mock_key_verification.server = "gerrit.onap.org"
+        mock_key_verification.key_registered = False
+        mock_result.key_verifications = [mock_key_verification]
         mock_result.signature_info = Mock()
         mock_result.signature_info.type = "ssh"
         mock_result.version_info = Mock()
@@ -546,11 +549,12 @@ class TestGerritVerification:
         mock_result.info = [
             "Signing key verified for required owner on Gerrit: maintainer@project.org"
         ]
-        mock_result.key_verification = Mock()
-        mock_result.key_verification.service = "gerrit"
-        mock_result.key_verification.server = "gerrit.onap.org"
-        mock_result.key_verification.key_registered = True
-        mock_result.key_verification.username = "maintainer@project.org"
+        mock_key_verification = Mock()
+        mock_key_verification.service = "gerrit"
+        mock_key_verification.server = "gerrit.onap.org"
+        mock_key_verification.key_registered = True
+        mock_key_verification.username = "maintainer@project.org"
+        mock_result.key_verifications = [mock_key_verification]
         mock_result.signature_info = Mock()
         mock_result.signature_info.type = "gpg"
         mock_result.version_info = Mock()
@@ -602,10 +606,9 @@ class TestGerritVerification:
         mock_key_verification.username = "12345"
         mock_key_verification.user_email = "test@example.com"
         mock_key_verification.user_name = "Test User"
-        mock_key_verification.enumerated = False
+        mock_key_verification.user_enumerated = False
         mock_key_verification.key_info = None
 
-        mock_result.key_verification = mock_key_verification
         mock_result.key_verifications = [mock_key_verification]
 
         # Signature info with all required attributes for JSON

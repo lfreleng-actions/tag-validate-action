@@ -32,11 +32,18 @@ Typical usage:
 """
 
 import logging
+import re
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 from .display_utils import format_server_display, format_user_details
-from .gerrit_keys import GerritKeysClient, GerritServerError
+from .gerrit_keys import (
+    GerritKeysClient,
+    GerritServerError,
+    GerritMissingCredentialsError,
+    GerritInvalidCredentialsError,
+)
 from .github_keys import GitHubKeysClient
 from .models import (
     KeyVerificationResult,
@@ -81,6 +88,11 @@ class ValidationWorkflow:
             repo_path: Path to Git repository (default: current directory)
             gerrit_username: Gerrit username for HTTP authentication (optional)
             gerrit_password: Gerrit HTTP password for authentication (optional)
+
+        Security Note:
+            Credentials (gerrit_password) are stored in memory only for the duration
+            of operations and are never logged or included in error messages.
+            The password is masked in string representations to prevent accidental exposure.
         """
         self.config = config
         self.repo_path = repo_path or Path.cwd()
@@ -94,6 +106,20 @@ class ValidationWorkflow:
         self._current_github_org: Optional[str] = None
 
         logger.debug(f"Initialized ValidationWorkflow with config: {config}")
+
+    def __repr__(self) -> str:
+        """Return string representation with masked credentials.
+
+        Security: Password is never exposed in string representation.
+        """
+        password_status = "set" if self.gerrit_password else "not set"
+        username_display = repr(self.gerrit_username) if self.gerrit_username else "None"
+        return (
+            f"ValidationWorkflow(config={self.config!r}, "
+            f"repo_path={self.repo_path}, "
+            f"gerrit_username={username_display}, "
+            f"gerrit_password=***{password_status}***)"
+        )
 
     async def _setup_ssh_allowed_signers(self) -> None:
         """Setup SSH allowed signers for the current repository."""
@@ -149,7 +175,6 @@ class ValidationWorkflow:
             tag_info=None,
             version_info=None,
             signature_info=None,
-            key_verification=None,
         )
 
         # Step 1: Fetch tag information
@@ -193,7 +218,7 @@ class ValidationWorkflow:
 
         # Step 3: Detect and validate signature
         try:
-            signature_info = await self._detect_signature(tag_name)
+            signature_info = await self._detect_signature(tag_name, tag_info)
             result.signature_info = signature_info
 
             if not self._check_signature_requirements(signature_info, result):
@@ -218,7 +243,7 @@ class ValidationWorkflow:
                 else:
                     # Auto-detect GitHub username from tagger email if not provided
                     detected_user = github_user
-                    was_enumerated = False
+                    was_user_enumerated = False
                     if not detected_user and signature_info.signer_email:
                         logger.debug(f"Attempting to auto-detect GitHub username from email: {signature_info.signer_email}")
                         try:
@@ -226,7 +251,7 @@ class ValidationWorkflow:
                             async with GitHubKeysClient(token=github_token) as client:
                                 detected_user = await client.lookup_username_by_email(signature_info.signer_email)
                                 if detected_user:
-                                    was_enumerated = True
+                                    was_user_enumerated = True
                                     logger.debug(f"Auto-detected GitHub username: {detected_user}")
                                     # User info is already shown in GitHub User section
                                 else:
@@ -244,7 +269,6 @@ class ValidationWorkflow:
                                 github_token,
                                 require_owners,
                             )
-                            result.key_verification = key_result
                             result.key_verifications.append(key_result)
 
                             if not key_result.key_registered:
@@ -264,10 +288,9 @@ class ValidationWorkflow:
                                 github_token,
                                 require_owners,
                             )
-                            # Set enumerated flag if username was auto-detected
-                            if was_enumerated and key_result:
-                                key_result.enumerated = True
-                            result.key_verification = key_result
+                            # Set user_enumerated flag if username was auto-detected
+                            if was_user_enumerated and key_result:
+                                key_result.user_enumerated = True
                             result.key_verifications.append(key_result)
 
                             if not key_result.key_registered:
@@ -313,10 +336,23 @@ class ValidationWorkflow:
                         connection_ok, connection_error = await test_client.verify_connection()
                         if not connection_ok:
                             # Connection/auth failed - mark invalid and raise to skip key verification
-                            # Error message will be added in the exception handler to avoid duplication
                             result.is_valid = False
-                            logger.error(f"Gerrit connection failed: {connection_error}")
-                            raise GerritServerError(f"Connection failed: {connection_error}")
+
+                            # Handle case where connection_error might be None
+                            error_msg = connection_error or "Unknown connection error"
+                            logger.error(f"Gerrit connection failed: {error_msg}")
+
+                            # Determine if this is a credentials issue based on the error message
+                            error_lower = error_msg.lower()
+                            if "credentials required" in error_lower:
+                                # No credentials provided
+                                raise GerritMissingCredentialsError(error_msg)
+                            elif "invalid credentials" in error_lower or "rejected the provided credentials" in error_lower:
+                                # Credentials provided but invalid
+                                raise GerritInvalidCredentialsError(error_msg)
+                            else:
+                                # Other connection/server errors
+                                raise GerritServerError(error_msg)
 
                     # Use require_owners if provided, otherwise verify against tagger email
                     key_result = await self._require_gerrit_key(
@@ -327,8 +363,6 @@ class ValidationWorkflow:
                     )
 
                     # Add Gerrit verification to the list
-                    if not result.key_verification:
-                        result.key_verification = key_result
                     result.key_verifications.append(key_result)
 
                     if not key_result.key_registered:
@@ -341,18 +375,38 @@ class ValidationWorkflow:
                             result.add_error(f"Signing key not registered on Gerrit server {key_result.server}")
 
 
+                except GerritMissingCredentialsError as e:
+                    # Credentials required but not provided
+                    error_msg = str(e)
+                    logger.warning(f"Gerrit key verification unavailable: Missing credentials - {e}")
+                    result.is_valid = False
+                    result.add_error(
+                        f"Gerrit key verification required but credentials not provided: {error_msg}"
+                    )
+                    result.add_error(
+                        "Please provide Gerrit credentials via GERRIT_USERNAME and GERRIT_PASSWORD environment variables."
+                    )
+
+                except GerritInvalidCredentialsError as e:
+                    # Credentials provided but invalid
+                    error_msg = str(e)
+                    logger.warning(f"Gerrit key verification unavailable: Invalid credentials - {e}")
+                    result.is_valid = False
+                    result.add_error(
+                        f"Gerrit key verification required but authentication failed: {error_msg}"
+                    )
+                    result.add_error(
+                        "Please verify your Gerrit username and HTTP password are correct. "
+                        "Note: Use HTTP password from Gerrit Settings > HTTP Credentials, not your SSO/LDAP password."
+                    )
+
                 except GerritServerError as e:
-                    # API access errors - provide helpful message
+                    # Other server errors (connection issues, endpoint not available, etc.)
                     error_msg = str(e)
                     logger.warning(f"Gerrit key verification unavailable: {e}")
 
                     # Determine error type from message content
                     lower_msg = error_msg.lower()
-                    is_auth_error = (
-                        "authentication required" in lower_msg or
-                        "authentication failed" in lower_msg or
-                        "provide valid gerrit credentials" in lower_msg
-                    )
                     is_endpoint_error = (
                         "endpoint not available" in lower_msg or
                         "may not support" in lower_msg
@@ -363,21 +417,7 @@ class ValidationWorkflow:
                     result.is_valid = False
 
                     # Add appropriate error message based on the failure type
-                    if "Connection failed:" in error_msg:
-                        # Connection check failed - provide clear auth/connection error
-                        clean_msg = error_msg.replace("Connection failed: ", "")
-                        result.add_error(
-                            f"Gerrit key verification required but cannot connect to server: {clean_msg}"
-                        )
-                    elif is_auth_error:
-                        # Authentication error - provide specific guidance
-                        result.add_error(
-                            f"Gerrit key verification required but authentication failed: {error_msg}"
-                        )
-                        result.add_error(
-                            "Please ensure valid Gerrit credentials are provided via GERRIT_USERNAME and GERRIT_PASSWORD."
-                        )
-                    elif is_endpoint_error:
+                    if is_endpoint_error:
                         # Endpoint not available
                         result.add_error(
                             f"Gerrit key verification required but unavailable: {error_msg}"
@@ -503,11 +543,12 @@ class ValidationWorkflow:
 
         return True
 
-    async def _detect_signature(self, tag_name: str) -> SignatureInfo:
-        """Detect and verify tag signature.
+    async def _detect_signature(self, tag_name: str, tag_info: TagInfo) -> SignatureInfo:
+        """Detect signature on a tag.
 
         Args:
             tag_name: Name of the tag
+            tag_info: Tag information including tagger email
 
         Returns:
             SignatureInfo: Signature detection result
@@ -517,6 +558,18 @@ class ValidationWorkflow:
         """
         logger.debug(f"Detecting signature: {tag_name}")
         signature_info = await self.detector.detect_signature(tag_name)
+
+        # For SSH signatures, use tagger email as fallback if signer_email is not set
+        if signature_info.type == "ssh" and not signature_info.signer_email and tag_info.tagger_email:
+            logger.debug(f"Using tagger email as signer email for SSH signature: {tag_info.tagger_email}")
+            signature_info = SignatureInfo(
+                type=signature_info.type,
+                verified=signature_info.verified,
+                signer_email=tag_info.tagger_email,
+                key_id=signature_info.key_id,
+                fingerprint=signature_info.fingerprint,
+                signature_data=signature_info.signature_data,
+            )
 
         logger.debug(
             f"Signature detected: type={signature_info.type}, "
@@ -721,7 +774,7 @@ class ValidationWorkflow:
                 return KeyVerificationResult(
                     key_registered=False,
                     username=", ".join(require_owners),
-                    enumerated=False,
+                    user_enumerated=False,
                     key_info=None,
                     service="github",
                     server="github.com",
@@ -800,7 +853,7 @@ class ValidationWorkflow:
                 return KeyVerificationResult(
                     key_registered=False,
                     username=tagger_email,
-                    enumerated=True,
+                    user_enumerated=True,
                     key_info=None,
                     service="gerrit",
                     server=gerrit_server,
@@ -828,7 +881,7 @@ class ValidationWorkflow:
                     return KeyVerificationResult(
                         key_registered=False,
                         username=", ".join(require_owners),
-                        enumerated=False,
+                        user_enumerated=False,
                         key_info=None,
                         service="gerrit",
                         server=gerrit_server,
@@ -876,7 +929,6 @@ class ValidationWorkflow:
 
         try:
             # Try to get remote URL from git repository
-            import subprocess
             result = subprocess.run(
                 ["git", "remote", "get-url", "origin"],
                 cwd=self.repo_path,
@@ -890,7 +942,6 @@ class ValidationWorkflow:
                 logger.debug(f"Found git remote URL: {remote_url}")
 
                 # Parse GitHub URL patterns
-                import re
                 patterns = [
                     r"github\.com[:/]([^/]+)/",  # https://github.com/owner/ or git@github.com:owner/
                     r"github\.com/([^/]+)",      # https://github.com/owner (no trailing slash)
@@ -902,7 +953,13 @@ class ValidationWorkflow:
                         org = match.group(1)
                         logger.debug(f"Extracted GitHub org from remote URL: {org}")
                         return org
+            else:
+                logger.debug(f"Git remote command failed with return code {result.returncode}")
 
+        except subprocess.TimeoutExpired:
+            logger.debug("Git remote command timed out after 5 seconds")
+        except subprocess.SubprocessError as e:
+            logger.debug(f"Git subprocess error while extracting GitHub org: {e}")
         except Exception as e:
             logger.debug(f"Could not extract GitHub org from git remote: {e}")
 
@@ -1008,7 +1065,6 @@ class ValidationWorkflow:
                     tag_info=None,
                     version_info=None,
                     signature_info=None,
-                    key_verification=None,
                 )
                 error_msg = f"Failed to validate remote tag: {e}"
                 result.add_error(error_msg)
@@ -1065,7 +1121,6 @@ class ValidationWorkflow:
                         tag_info=None,
                         version_info=None,
                         signature_info=None,
-                        key_verification=None,
                     )
                     error_msg = f"Failed to validate local tag: {e}"
                     result.add_error(error_msg)
@@ -1134,7 +1189,6 @@ class ValidationWorkflow:
                         tag_info=None,
                         version_info=None,
                         signature_info=None,
-                        key_verification=None,
                     )
                     error_msg = f"Failed to validate remote tag: {e}"
 
@@ -1269,31 +1323,6 @@ class ValidationWorkflow:
                 )
                 lines.extend(user_lines)
                 lines.append("")
-        elif result.key_verification:
-            # Legacy support for old single key_verification field
-            k = result.key_verification
-
-            # Determine service name and status
-            service_name = "Gerrit" if k.service == "gerrit" else "GitHub"
-            status_icon = "✅" if k.key_registered else "❌"
-
-            lines.append(f"{service_name} Registered {status_icon}")
-
-            # Show server info using shared utility
-            server_line = format_server_display(k.service, k.server)
-            if server_line:
-                lines.append(server_line)
-
-            lines.append("")
-            lines.append(f"{service_name} User:")
-
-            # Build user details using shared utility
-            user_lines = format_user_details(
-                username=k.username,
-                email=k.user_email,
-                name=k.user_name
-            )
-            lines.extend(user_lines)
 
         # Errors - filter out redundant registration errors
         if result.errors:
@@ -1302,8 +1331,6 @@ class ValidationWorkflow:
             services_in_display = set()
             if result.key_verifications:
                 services_in_display = {k.service for k in result.key_verifications}
-            elif result.key_verification:
-                services_in_display = {result.key_verification.service}
 
             filtered_errors = []
             for error in result.errors:

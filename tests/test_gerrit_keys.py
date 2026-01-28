@@ -677,13 +677,17 @@ class TestErrorHandling:
                 new=AsyncMock(return_value="https://gerrit.onap.org"),
             ),
             patch("tag_validate.gerrit_keys.GerritRestAPI", return_value=mock_rest),
+            patch.dict(
+                "os.environ",
+                {"GERRIT_USERNAME": "", "GERRIT_PASSWORD": ""},
+                clear=False,
+            ),
         ):
             async with GerritKeysClient(server="gerrit.onap.org") as client:
                 success, error = await client.verify_connection()
                 assert success is False
-                assert "Authentication required" in error
+                assert "Credentials required" in error
                 assert "gerrit.onap.org" in error
-                assert "--gerrit-username" in error
 
     @pytest.mark.asyncio
     async def test_verify_connection_auth_failed(self):
@@ -709,8 +713,8 @@ class TestErrorHandling:
             async with GerritKeysClient(server="gerrit.onap.org") as client:
                 success, error = await client.verify_connection()
                 assert success is False
+                assert "Invalid credentials" in error
                 assert "Authentication failed" in error
-                assert "verify your Gerrit credentials" in error
 
     @pytest.mark.asyncio
     async def test_verify_connection_network_error(self):

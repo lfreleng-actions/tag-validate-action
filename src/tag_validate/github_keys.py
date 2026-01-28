@@ -313,7 +313,7 @@ class GitHubKeysClient:
                     return KeyVerificationResult(
                         key_registered=True,
                         username=username,
-                        enumerated=False,
+                        user_enumerated=False,
                         key_info=key,
                         service="github",
                         server=self.server,
@@ -331,7 +331,7 @@ class GitHubKeysClient:
                             return KeyVerificationResult(
                                 key_registered=True,
                                 username=username,
-                                enumerated=False,
+                                user_enumerated=False,
                                 key_info=key,  # Return the primary key info, not the subkey
                                 service="github",
                                 server=self.server,
@@ -344,7 +344,7 @@ class GitHubKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=username,
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="github",
                 server=self.server,
@@ -405,7 +405,7 @@ class GitHubKeysClient:
                         return KeyVerificationResult(
                             key_registered=True,
                             username=username,
-                            enumerated=False,
+                            user_enumerated=False,
                             key_info=key,
                             service="github",
                             server=self.server,
@@ -418,7 +418,7 @@ class GitHubKeysClient:
                         return KeyVerificationResult(
                             key_registered=True,
                             username=username,
-                            enumerated=False,
+                            user_enumerated=False,
                             key_info=key,
                             service="github",
                             server=self.server,
@@ -431,7 +431,7 @@ class GitHubKeysClient:
             return KeyVerificationResult(
                 key_registered=False,
                 username=username,
-                enumerated=False,
+                user_enumerated=False,
                 key_info=None,
                 service="github",
                 server=self.server,

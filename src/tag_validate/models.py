@@ -122,7 +122,7 @@ class KeyVerificationResult(BaseModel):
         False, description="Whether the key is registered on the service"
     )
     username: str = Field(..., description="Username checked")
-    enumerated: bool = Field(
+    user_enumerated: bool = Field(
         False, description="Whether the username was auto-detected from email"
     )
     key_info: Optional[GPGKeyInfo | SSHKeyInfo | GerritGPGKeyInfo | GerritSSHKeyInfo] = Field(
@@ -204,9 +204,6 @@ class ValidationResult(BaseModel):
     tag_info: Optional[TagInfo] = Field(None, description="Tag metadata")
     version_info: Optional[VersionInfo] = Field(None, description="Version validation result")
     signature_info: Optional[SignatureInfo] = Field(None, description="Signature information")
-    key_verification: Optional[KeyVerificationResult] = Field(
-        None, description="Key verification result (GitHub or Gerrit) - deprecated, use key_verifications"
-    )
     key_verifications: list[KeyVerificationResult] = Field(
         default_factory=list, description="List of key verification results (GitHub and/or Gerrit)"
     )

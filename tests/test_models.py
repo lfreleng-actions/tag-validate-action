@@ -649,10 +649,12 @@ class TestModelIntegration:
                 fingerprint="1234567890ABCDEF",
                 signature_data="gpg: Good signature",
             ),
-            key_verification=KeyVerificationResult(
-                key_registered=True,
-                username="testuser",
-            ),
+            key_verifications=[
+                KeyVerificationResult(
+                    key_registered=True,
+                    username="testuser",
+                )
+            ],
         )
 
         # Test serialization of nested models
@@ -660,7 +662,7 @@ class TestModelIntegration:
         assert data["is_valid"] is True
         assert data["version_info"]["version_type"] == "semver"
         assert data["signature_info"]["type"] == "gpg"
-        assert data["key_verification"]["key_registered"] is True
+        assert data["key_verifications"][0]["key_registered"] is True
 
     def test_json_serialization(self):
         """Test JSON serialization of complex nested models."""
@@ -775,7 +777,7 @@ class TestGerritKeyVerificationResult:
         assert result.username == "12345"
         assert result.service == "gerrit"
         assert result.server == "gerrit.onap.org"
-        assert result.enumerated is False
+        assert result.user_enumerated is False
 
     def test_gerrit_key_verification_failed(self):
         """Test failed Gerrit key verification result."""
@@ -784,7 +786,7 @@ class TestGerritKeyVerificationResult:
         result = KeyVerificationResult(
             key_registered=False,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -888,7 +890,7 @@ class TestGerritIntegration:
         key_verification = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -923,10 +925,10 @@ class TestGerritIntegration:
                 signer_email="john@example.com",
                 fingerprint="SHA256:abc123def456",
             ),
-            key_verification=key_verification,
+            key_verifications=[key_verification],
         )
 
         assert result.is_valid is True
         assert result.config.require_gerrit is True
-        assert result.key_verification.service == "gerrit"
-        assert result.key_verification.key_registered is True
+        assert result.key_verifications[0].service == "gerrit"
+        assert result.key_verifications[0].key_registered is True

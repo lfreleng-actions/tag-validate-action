@@ -66,10 +66,12 @@ class TestRequireOwnerCLI:
             verified=True,
             key_id="ABC123",
         )
-        result.key_verification = KeyVerificationResult(
-            key_registered=True,
-            username="octocat",
-        )
+        result.key_verifications = [
+            KeyVerificationResult(
+                key_registered=True,
+                username="octocat",
+            )
+        ]
 
         mock_workflow.validate_tag_location = AsyncMock(return_value=result)
 

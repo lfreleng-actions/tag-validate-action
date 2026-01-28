@@ -224,7 +224,7 @@ def sample_key_verification_result():
         key_registered=True,
         username="testuser",
         service="github",
-        enumerated=False,
+        user_enumerated=False,
         key_info=None,
     )
 
@@ -293,7 +293,7 @@ def sample_gerrit_key_verification_result():
     return KeyVerificationResult(
         key_registered=True,
         username="12345",
-        enumerated=False,
+        user_enumerated=False,
         key_info=None,
         service="gerrit",
         server="gerrit.onap.org",

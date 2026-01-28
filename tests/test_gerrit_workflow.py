@@ -108,6 +108,48 @@ class TestGerritServerDiscovery:
         org = workflow._extract_github_org_from_context()
         assert org is None
 
+    @patch("subprocess.run")
+    def test_extract_github_org_timeout(self, mock_run):
+        """Test GitHub org extraction when git command times out."""
+        import subprocess
+
+        config = ValidationConfig(require_gerrit=True)
+        workflow = ValidationWorkflow(config)
+
+        # Mock git command timeout
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["git", "remote", "get-url", "origin"], timeout=5
+        )
+
+        org = workflow._extract_github_org_from_context()
+        assert org is None
+
+    @patch("subprocess.run")
+    def test_extract_github_org_subprocess_error(self, mock_run):
+        """Test GitHub org extraction when subprocess encounters an error."""
+        import subprocess
+
+        config = ValidationConfig(require_gerrit=True)
+        workflow = ValidationWorkflow(config)
+
+        # Mock subprocess error
+        mock_run.side_effect = subprocess.SubprocessError("Git command failed")
+
+        org = workflow._extract_github_org_from_context()
+        assert org is None
+
+    @patch("subprocess.run")
+    def test_extract_github_org_generic_exception(self, mock_run):
+        """Test GitHub org extraction when an unexpected exception occurs."""
+        config = ValidationConfig(require_gerrit=True)
+        workflow = ValidationWorkflow(config)
+
+        # Mock unexpected exception
+        mock_run.side_effect = RuntimeError("Unexpected error")
+
+        org = workflow._extract_github_org_from_context()
+        assert org is None
+
 
 class TestGerritKeyVerification:
     """Test Gerrit key verification in workflow."""
@@ -240,7 +282,7 @@ class TestGerritKeyVerification:
 
         assert result.key_registered is False
         assert result.username == "notfound@example.com"
-        assert result.enumerated is True
+        assert result.user_enumerated is True
         assert result.service == "gerrit"
 
     @pytest.mark.asyncio
@@ -424,9 +466,9 @@ class TestGerritWorkflowIntegration:
             result = await workflow.validate_tag("v1.0.0")
 
         assert result.is_valid is True
-        assert result.key_verification is not None
-        assert result.key_verification.service == "gerrit"
-        assert result.key_verification.key_registered is True
+        assert len(result.key_verifications) == 1
+        assert result.key_verifications[0].service == "gerrit"
+        assert result.key_verifications[0].key_registered is True
 
     @pytest.mark.asyncio
     async def test_validate_tag_with_gerrit_failure(self):
@@ -487,9 +529,9 @@ class TestGerritWorkflowIntegration:
             result = await workflow.validate_tag("v1.0.0")
 
         assert result.is_valid is False
-        assert result.key_verification is not None
-        assert result.key_verification.service == "gerrit"
-        assert result.key_verification.key_registered is False
+        assert len(result.key_verifications) == 1
+        assert result.key_verifications[0].service == "gerrit"
+        assert result.key_verifications[0].key_registered is False
         assert any(
             "not registered on Gerrit server" in error for error in result.errors
         )
@@ -626,7 +668,7 @@ class TestGerritWorkflowIntegration:
         mock_gerrit_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -657,10 +699,10 @@ class TestGerritWorkflowIntegration:
             result = await workflow.validate_tag("v1.0.0")
 
         assert result.is_valid is True
-        assert result.key_verification is not None
-        assert result.key_verification.service == "gerrit"
+        assert len(result.key_verifications) == 1
+        assert result.key_verifications[0].service == "gerrit"
         # Should have discovered gerrit.onap.org from the GitHub org
-        assert result.key_verification.server == "gerrit.onap.org"
+        assert result.key_verifications[0].server == "gerrit.onap.org"
 
     @pytest.mark.asyncio
     async def test_validate_tag_gerrit_no_server_discovery(self):
@@ -719,14 +761,16 @@ class TestGerritWorkflowIntegration:
             tag_info=None,
             version_info=None,
             signature_info=None,
-            key_verification=KeyVerificationResult(
-                key_registered=True,
-                username="12345",
-                enumerated=False,
-                key_info=None,
-                service="gerrit",
-                server="gerrit.onap.org",
-            ),
+            key_verifications=[
+                KeyVerificationResult(
+                    key_registered=True,
+                    username="12345",
+                    user_enumerated=False,
+                    key_info=None,
+                    service="gerrit",
+                    server="gerrit.onap.org",
+                )
+            ],
         )
 
         with (
@@ -747,5 +791,5 @@ class TestGerritWorkflowIntegration:
             result = await workflow.validate_tag_location("onap/policy-engine@v1.0.0")
 
         assert result.is_valid is True
-        assert result.key_verification.service == "gerrit"
-        assert result.key_verification.server == "gerrit.onap.org"
+        assert result.key_verifications[0].service == "gerrit"
+        assert result.key_verifications[0].server == "gerrit.onap.org"

@@ -115,6 +115,24 @@ inputs:
       Set to 'true' when testing changes in a fork or branch before merging.
     required: false
     default: 'false'
+  upload_json:
+    description: >-
+      Upload validation results as JSON artifact to the workflow run.
+      The artifact includes detailed validation information in JSON format.
+    required: false
+    default: 'true'
+  json_upload_format:
+    description: >-
+      JSON artifact format: 'compact', 'pretty', or 'both'.
+      Compact format is single-line, pretty format is indented for readability.
+    required: false
+    default: 'pretty'
+  github_step_summary:
+    description: >-
+      Write validation summary to GitHub Actions step summary.
+      Automatically detects GitHub Actions environment.
+    required: false
+    default: 'true'
 
 outputs:
   valid:
@@ -136,6 +154,12 @@ outputs:
   tag_name:
     description: 'The tag name being validated'
     value: ${{ steps.validate.outputs.tag_name }}
+  artifact_path:
+    description: 'Path to the JSON artifact file (if uploaded)'
+    value: ${{ steps.validate.outputs.artifact_path }}
+  artifact_suffix:
+    description: 'Unique suffix for artifact naming (to avoid conflicts)'
+    value: ${{ steps.validate.outputs.artifact_suffix }}
 
 runs:
   using: 'composite'
@@ -203,7 +227,7 @@ runs:
       id: validate
       shell: bash
       run: |
-        # Run tag-validate Python CLI with JSON output
+        # Run tag-validate Python CLI with rich output
         set -euo pipefail
 
         # Normalize inputs to lowercase for case-insensitive matching
@@ -216,9 +240,11 @@ runs:
         PERMIT_MISSING=$(echo "${{ inputs.permit_missing }}" | tr '[:upper:]' '[:lower:]')
         DEBUG=$(echo "${{ inputs.debug }}" | tr '[:upper:]' '[:lower:]')
         USE_LOCAL_ACTION=$(echo "${{ inputs.use_local_action }}" | tr '[:upper:]' '[:lower:]')
+        UPLOAD_JSON=$(echo "${{ inputs.upload_json }}" | tr '[:upper:]' '[:lower:]')
+        JSON_UPLOAD_FORMAT=$(echo "${{ inputs.json_upload_format }}" | tr '[:upper:]' '[:lower:]')
+        GITHUB_STEP_SUMMARY_ENABLED=$(echo "${{ inputs.github_step_summary }}" | tr '[:upper:]' '[:lower:]')
 
         # Build command arguments
-        ARGS=("--json")
         USE_VERSION_ONLY="false"
 
         # Determine tag location or string
@@ -351,90 +377,104 @@ runs:
 
         if [ "${USE_VERSION_ONLY}" = "true" ]; then
           # validate command only uses common args (no signature args)
-          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} validate \"${TAG_LOCATION}\" ${COMMON_ARGS[@]} --json"
-          JSON_OUTPUT=$(${CLI_CMD} ${VERBOSE_FLAG} validate "${TAG_LOCATION}" "${COMMON_ARGS[@]}" --json 2>&1) || EXIT_CODE=$?
+          # Note: validate command doesn't support --github-step-summary or --json-file flags
+
+          # If upload_json is enabled, add --json-file flag to write JSON while showing rich output
+          if [ "${UPLOAD_JSON}" = "true" ]; then
+            # Create temp file for JSON output
+            JSON_FILE="${RUNNER_TEMP}/tag-validate-output.json"
+            COMMON_ARGS+=("--json-file" "${JSON_FILE}")
+          fi
+
+          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} validate \"${TAG_LOCATION}\" ${COMMON_ARGS[@]}"
+          ${CLI_CMD} ${VERBOSE_FLAG} validate "${TAG_LOCATION}" "${COMMON_ARGS[@]}" || EXIT_CODE=$?
+          echo ""  # Add blank line after rich output
+
+          # Read JSON from file if it was created
+          if [ "${UPLOAD_JSON}" = "true" ] && [ -f "${JSON_FILE}" ]; then
+            JSON_OUTPUT=$(cat "${JSON_FILE}")
+            rm -f "${JSON_FILE}"
+          fi
         else
           # verify command uses both common and verify-specific args
           ALL_VERIFY_ARGS=("${COMMON_ARGS[@]}" "${VERIFY_ARGS[@]}")
-          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]} --json"
-          JSON_OUTPUT=$(${CLI_CMD} ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" --json 2>&1) || EXIT_CODE=$?
+
+          # Add --github-step-summary or --no-github-step-summary flag
+          if [ "${GITHUB_STEP_SUMMARY_ENABLED}" = "true" ]; then
+            ALL_VERIFY_ARGS+=("--github-step-summary")
+          else
+            ALL_VERIFY_ARGS+=("--no-github-step-summary")
+          fi
+
+          # If upload_json is enabled, add --json-file flag to write JSON while showing rich output
+          if [ "${UPLOAD_JSON}" = "true" ]; then
+            # Create temp file for JSON output
+            JSON_FILE="${RUNNER_TEMP}/tag-validate-output.json"
+            ALL_VERIFY_ARGS+=("--json-file" "${JSON_FILE}")
+          fi
+
+          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]}"
+          ${CLI_CMD} ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" || EXIT_CODE=$?
+          echo ""  # Add blank line after rich output
+
+          # Read JSON from file if it was created
+          if [ "${UPLOAD_JSON}" = "true" ] && [ -f "${JSON_FILE}" ]; then
+            JSON_OUTPUT=$(cat "${JSON_FILE}")
+            rm -f "${JSON_FILE}"
+          fi
         fi
 
-        # Display command exit code and raw output for debugging
-        echo "📊 Command exit code: ${EXIT_CODE}"
-        echo "📄 Raw output (first 2000 chars):"
-        echo "${JSON_OUTPUT}" | head -c 2000
-        echo ""
-        echo "---"
-
-        # If command failed, show full output and exit
-        if [ ${EXIT_CODE} -ne 0 ]; then
-          echo "❌ Command failed with exit code ${EXIT_CODE}" >&2
-          echo "Full output:" >&2
-          echo "${JSON_OUTPUT}" >&2
-          exit ${EXIT_CODE}
+        # Handle JSON artifact upload if enabled
+        if [ "${UPLOAD_JSON}" = "true" ] && [ -n "${JSON_OUTPUT:-}" ]; then
+          # Validate JSON using Python
+          python3 -c "import json; json.loads('''${JSON_OUTPUT}''')" 2>/dev/null || {
+            echo "Warning: Invalid JSON for artifact upload" >&2
+            echo "Continuing without artifact upload..." >&2
+            UPLOAD_JSON="false"
+          }
         fi
 
-        # Extract and validate JSON from output using Python
-        # This handles cases where uvx might include non-JSON output
-        # Python is already available from the setup-python step above
-        cat > /tmp/extract_json.py << 'EOF'
-        import json
-        import sys
+        # Generate artifact suffix (timestamp + random hex for uniqueness)
+        if [ "${UPLOAD_JSON}" = "true" ]; then
+          ARTIFACT_SUFFIX=$(python3 -c "
+        import secrets
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        datetime_str = now.strftime('%Y%m%d-%H%M%S')
+        random_hex = secrets.token_hex(2)  # 4 hex chars
+        print(f'{datetime_str}-{random_hex}')
+        ")
 
-        # Read raw output from stdin
-        text = sys.stdin.read()
+          # Create artifact directory
+          ARTIFACT_DIR="${RUNNER_TEMP}/tag-validate-${ARTIFACT_SUFFIX}"
+          mkdir -p "${ARTIFACT_DIR}"
 
-        # Try to find the first valid JSON object in the output
-        decoder = json.JSONDecoder()
-        start = text.find('{')
-        max_attempts = 10  # Prevent infinite loops in malformed data
-        attempts = 0
-        while start != -1 and attempts < max_attempts:
-            attempts += 1
-            try:
-                # Parse the JSON starting at this position without slicing
-                obj, _ = decoder.raw_decode(text, idx=start)
-                # Re-serialize to ensure we have clean, valid JSON only
-                clean_json = json.dumps(obj, ensure_ascii=False)
-                print(clean_json, end='')
-                sys.exit(0)
-            except (json.JSONDecodeError, ValueError):
-                # Not valid JSON at this position, search for the next candidate
-                start = text.find('{', start + 1)
+          # Write JSON files based on format preference
+          case "${JSON_UPLOAD_FORMAT}" in
+            compact)
+              echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
+              ;;
+            pretty)
+              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              ;;
+            both)
+              echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
+              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              ;;
+            *)
+              echo "Warning: Invalid json_upload_format '${JSON_UPLOAD_FORMAT}', defaulting to 'pretty'" >&2
+              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              ;;
+          esac
 
-        # No valid JSON found
-        print('ERROR: No valid JSON object found in output', file=sys.stderr)
-        sys.exit(1)
-        EOF
-
-        EXTRACTED_JSON=$(echo "${JSON_OUTPUT}" | python3 /tmp/extract_json.py)
-        EXTRACT_EXIT_CODE=$?
-
-        if [ ${EXTRACT_EXIT_CODE} -ne 0 ]; then
-          echo "❌ Error: Failed to extract valid JSON from tag-validate CLI output" >&2
-          echo "📄 Full raw output:" >&2
-          echo "${JSON_OUTPUT}" >&2
-          echo "" >&2
-          echo "🔍 Debugging info:" >&2
-          echo "  - Command: ${CLI_CMD}" >&2
-          echo "  - Exit code: ${EXIT_CODE}" >&2
-          echo "  - Output length: ${#JSON_OUTPUT} chars" >&2
-          echo "  - First 500 chars: ${JSON_OUTPUT:0:500}" >&2
-          exit 1
+          echo "✅ JSON artifact created: ${ARTIFACT_DIR}"
+        else
+          ARTIFACT_SUFFIX=""
+          ARTIFACT_DIR=""
         fi
 
-        # Display the extracted JSON
-        echo "${EXTRACTED_JSON}"
+        # Parse JSON output for GitHub outputs (using JSON if available, or defaults)
 
-        # Use the extracted JSON for further processing
-        JSON_OUTPUT="${EXTRACTED_JSON}"
-
-        # Python CLI now handles permit_missing logic internally
-        # If exit code is 0, validation succeeded (or was permitted to pass)
-        # If exit code is non-zero, validation failed
-
-        # Parse JSON output using Python (bundled with actions/setup-python)
         # Create temporary Python script to avoid YAML parsing issues
         cat > /tmp/parse_output.py << 'PYEOF'
         import json
@@ -442,56 +482,66 @@ runs:
         import os
         import re
 
-        json_output = sys.argv[1]
+        json_output = sys.argv[1] if len(sys.argv) > 1 else ""
+        exit_code = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+        artifact_dir = sys.argv[3] if len(sys.argv) > 3 else ""
+        artifact_suffix = sys.argv[4] if len(sys.argv) > 4 else ""
 
-        try:
-            data = json.loads(json_output)
-            success = str(data.get("success", False)).lower()
-            tag_name = data.get("tag_name", data.get("version", ""))
-            version_type = data.get("version_type", data.get("detected_type", "unknown")) or "unknown"
-            # Map 'other' to 'other' (custom format), keep all other values as-is
-            if version_type not in ["semver", "calver", "both", "other"]:
-                version_type = "unknown"
-            signature_type = data.get("signature_type", "unsigned") or "unsigned"
+        # Default values
+        success = "true" if exit_code == 0 else "false"
+        tag_name = ""
+        version_type = "unknown"
+        signature_type = "unsigned"
+        is_dev = "false"
+        has_prefix = "false"
 
-            # Determine development tag
-            # Support both new (development_tag) and old (is_development) field names for backwards compatibility
-            is_dev = "false"
-            if data.get("development_tag", False) or data.get("is_development", False):
-                is_dev = "true"
-            # Fallback: check tag name for development indicators (for backwards compatibility)
-            elif tag_name and re.search(r"(dev|pre|alpha|beta|rc|snapshot|nightly|canary|preview)", tag_name.lower()):
-                is_dev = "true"
+        # Try to parse JSON if available
+        if json_output:
+            try:
+                data = json.loads(json_output)
+                success = str(data.get("success", False)).lower()
+                tag_name = data.get("tag_name", data.get("version", ""))
+                version_type = data.get("version_type", data.get("detected_type", "unknown")) or "unknown"
+                # Map 'other' to 'other' (custom format), keep all other values as-is
+                if version_type not in ["semver", "calver", "both", "other"]:
+                    version_type = "unknown"
+                signature_type = data.get("signature_type", "unsigned") or "unsigned"
 
-            # Determine version prefix
-            # Support both new (version_prefix) and old (has_prefix) field names for backwards compatibility
-            has_prefix = "false"
-            if data.get("version_prefix", False) or data.get("has_prefix", False):
-                has_prefix = "true"
-            # Fallback: check tag name directly (for backwards compatibility)
-            elif tag_name and tag_name[0:1] in ("v", "V"):
-                has_prefix = "true"
+                # Determine development tag
+                # Support both new (development_tag) and old (is_development) field names for backwards compatibility
+                if data.get("development_tag", False) or data.get("is_development", False):
+                    is_dev = "true"
+                # Fallback: check tag name for development indicators (for backwards compatibility)
+                elif tag_name and re.search(r"(dev|pre|alpha|beta|rc|snapshot|nightly|canary|preview)", tag_name.lower()):
+                    is_dev = "true"
 
-            # Write to GITHUB_OUTPUT in single block
-            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                f.write(f"valid={success}\n")
-                f.write(f"tag_type={version_type}\n")
-                f.write(f"signing_type={signature_type}\n")
-                f.write(f"development_tag={is_dev}\n")
-                f.write(f"version_prefix={has_prefix}\n")
-                f.write(f"tag_name={tag_name}\n")
+                # Determine version prefix
+                # Support both new (version_prefix) and old (has_prefix) field names for backwards compatibility
+                if data.get("version_prefix", False) or data.get("has_prefix", False):
+                    has_prefix = "true"
+                # Fallback: check tag name directly (for backwards compatibility)
+                elif tag_name and tag_name[0:1] in ("v", "V"):
+                    has_prefix = "true"
+            except Exception as e:
+                print(f"Warning: Could not parse JSON output, using defaults: {e}", file=sys.stderr)
 
-            # Exit with appropriate code
-            sys.exit(0 if success == "true" else 1)
+        # Write to GITHUB_OUTPUT in single block
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"valid={success}\n")
+            f.write(f"tag_type={version_type}\n")
+            f.write(f"signing_type={signature_type}\n")
+            f.write(f"development_tag={is_dev}\n")
+            f.write(f"version_prefix={has_prefix}\n")
+            f.write(f"tag_name={tag_name}\n")
+            f.write(f"artifact_path={artifact_dir}\n")
+            f.write(f"artifact_suffix={artifact_suffix}\n")
 
-        except Exception as e:
-            print(f"Error parsing JSON output: {e}", file=sys.stderr)
-            print(f"JSON output was: {json_output}", file=sys.stderr)
-            sys.exit(1)
+        # Exit with the original command's exit code
+        sys.exit(exit_code)
         PYEOF
 
-        # Execute the Python script with JSON output as argument
-        python /tmp/parse_output.py "${JSON_OUTPUT}"
+        # Execute the Python script with JSON output and exit code as arguments
+        python /tmp/parse_output.py "${JSON_OUTPUT:-}" "${EXIT_CODE}" "${ARTIFACT_DIR:-}" "${ARTIFACT_SUFFIX:-}"
 
         # Exit code is already set by Python script above
       env:
@@ -499,3 +549,14 @@ runs:
         GITHUB_SERVER_URL: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}
         GERRIT_USERNAME: ${{ inputs.gerrit_username }}
         GERRIT_PASSWORD: ${{ inputs.gerrit_password }}
+
+    - name: 'Upload JSON artifact'
+      if: always() && inputs.upload_json == 'true' && steps.validate.outputs.artifact_path != ''
+      # yamllint disable-line rule:line-length
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        # yamllint disable-line rule:line-length
+        name: tag-validation-${{ steps.validate.outputs.artifact_suffix }}
+        path: ${{ steps.validate.outputs.artifact_path }}/
+        if-no-files-found: warn
+        retention-days: 90

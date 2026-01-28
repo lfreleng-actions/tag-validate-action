@@ -445,13 +445,15 @@ When using the Python CLI (`tag-validate`), the following exit codes are returne
 
 <!-- markdownlint-disable MD013 -->
 
-| Exit Code | Name                   | Description                                                             |
-| --------- | ---------------------- | ----------------------------------------------------------------------- |
-| 0         | EXIT_SUCCESS           | Validation passed                                                       |
-| 1         | EXIT_VALIDATION_FAILED | Validation failed (type mismatch, signature requirements not met, etc.) |
-| 2         | EXIT_MISSING_TOKEN     | GitHub token required but not provided (when using `--require-github`)  |
-| 3         | EXIT_INVALID_INPUT     | Invalid input parameters or malformed arguments                         |
-| 4         | EXIT_UNEXPECTED_ERROR  | Unexpected error during execution                                       |
+| Exit Code | Name                     | Description                                                                  |
+| --------- | ------------------------ | ---------------------------------------------------------------------------- |
+| 0         | EXIT_SUCCESS             | Validation passed                                                            |
+| 1         | EXIT_VALIDATION_FAILED   | Validation failed (type mismatch, signature requirements not met, etc.)      |
+| 2         | EXIT_MISSING_TOKEN       | GitHub token required but not provided (when using `--require-github`)       |
+| 3         | EXIT_INVALID_INPUT       | Invalid input parameters or malformed arguments                              |
+| 4         | EXIT_UNEXPECTED_ERROR    | Unexpected error during execution                                            |
+| 5         | EXIT_MISSING_CREDENTIALS | Gerrit credentials required but not provided (when using `--require-gerrit`) |
+| 6         | EXIT_AUTH_FAILED         | Gerrit authentication failed (invalid username or password)                  |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -462,12 +464,24 @@ When using the Python CLI (`tag-validate`), the following exit codes are returne
     not set
   - GitHub API access is required but no authentication token is available
 
+- Exit code `5` (EXIT_MISSING_CREDENTIALS) is returned when:
+  - `--require-gerrit` flag is used but Gerrit credentials are not provided
+  - Gerrit server requires authentication but `GERRIT_USERNAME` or `GERRIT_PASSWORD`
+    environment variables are not set
+
+- Exit code `6` (EXIT_AUTH_FAILED) is returned when:
+  - Gerrit credentials are provided but authentication fails
+  - Username or HTTP password is incorrect
+  - **Note:** Gerrit requires an HTTP password (from Settings > HTTP Credentials),
+    not your SSO/LDAP password
+
 - Exit code `1` (EXIT_VALIDATION_FAILED) covers all validation failures
   including:
   - Version type mismatch (e.g., CalVer tag when SemVer required)
   - Signature requirements not met
-  - Signing key not registered on GitHub (when `--require-github` is used)
-  - Missing username for GitHub key verification
+  - Signing key not registered on GitHub/Gerrit (when `--require-github` or
+    `--require-gerrit` is used)
+  - Missing username for key verification
 
 **Example handling exit codes in CI:**
 
@@ -488,6 +502,16 @@ case $exit_code in
   2)
     echo "❌ GitHub token not provided"
     echo "Set GITHUB_TOKEN environment variable"
+    exit 1
+    ;;
+  5)
+    echo "❌ Gerrit credentials not provided"
+    echo "Set GERRIT_USERNAME and GERRIT_PASSWORD environment variables"
+    exit 1
+    ;;
+  6)
+    echo "❌ Gerrit authentication failed"
+    echo "Verify your Gerrit HTTP password (not SSO/LDAP password)"
     exit 1
     ;;
   *)
