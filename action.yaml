@@ -67,7 +67,10 @@ inputs:
     description: >-
       Gerrit username for HTTP authentication. Required for Gerrit servers
       that restrict public access to user key information. Can also be set
-      via GERRIT_USERNAME environment variable.
+      via GERRIT_USERNAME environment variable. WARNING: Do NOT store this
+      as a GitHub secret. GitHub Actions masks secret values in all outputs,
+      which will cause the username to appear as '***' in the step summary
+      if it matches the key owner's username. Only the password is sensitive.
     required: false
     default: ''
   gerrit_password:
