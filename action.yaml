@@ -176,6 +176,8 @@ runs:
     - name: 'Install uv'
       if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        enable-cache: false
 
     - name: 'Install local dependencies'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
