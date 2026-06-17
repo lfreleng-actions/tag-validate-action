@@ -434,8 +434,6 @@ class SignatureDetector:
         Returns:
             SSH key fingerprint if found, None otherwise
         """
-        import subprocess
-        import tempfile
 
         try:
             # Get the tag object content

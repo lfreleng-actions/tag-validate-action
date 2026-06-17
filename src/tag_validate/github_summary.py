@@ -149,7 +149,7 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
         with summary_path.open("a", encoding="utf-8") as f:
             f.write("\n".join(markdown_lines))
 
-    except (OSError, PermissionError, IOError):
+    except (OSError, PermissionError):
         # Silently fail if we can't write to the summary
         # Don't want to break the validation just because summary fails
         pass

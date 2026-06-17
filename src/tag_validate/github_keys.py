@@ -24,8 +24,8 @@ import os
 from dependamerge.github_async import GitHubAsync
 
 from .models import (
-    GPGKeyInfo,
     GitHubVerificationInfo,
+    GPGKeyInfo,
     KeyVerificationResult,
     SSHKeyInfo,
 )

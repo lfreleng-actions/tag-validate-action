@@ -19,7 +19,6 @@ Typical usage:
 import logging
 import re
 from pathlib import Path
-from typing import Optional, Tuple
 
 from dependamerge.git_ops import clone, create_secure_tempdir, run_git, secure_rmtree
 
@@ -63,8 +62,8 @@ class TagOperations:
     async def fetch_tag_info(
         self,
         tag_name: str,
-        repo_path: Optional[Path] = None,
-        remote_url: Optional[str] = None,
+        repo_path: Path | None = None,
+        remote_url: str | None = None,
     ) -> TagInfo:
         """Fetch comprehensive information about a Git tag.
 
@@ -159,8 +158,8 @@ class TagOperations:
         owner: str,
         repo: str,
         tag: str,
-        token: Optional[str] = None,
-    ) -> Tuple[Path, TagInfo]:
+        token: str | None = None,
+    ) -> tuple[Path, TagInfo]:
         """Clone a remote repository and fetch tag information.
 
         Creates a temporary directory, clones the repository, and fetches
@@ -251,7 +250,7 @@ class TagOperations:
         # Check if file already exists in the cloned repository
         repo_signers = repo_path / ".ssh-allowed-signers"
         if repo_signers.exists():
-            logger.debug(f"Using .ssh-allowed-signers from cloned repository")
+            logger.debug("Using .ssh-allowed-signers from cloned repository")
             run_git(
                 ["git", "config", "gpg.ssh.allowedSignersFile", ".ssh-allowed-signers"],
                 cwd=repo_path,
@@ -268,7 +267,7 @@ class TagOperations:
         if cwd_signers.exists():
             signers_file = cwd_signers
             source_description = "current directory"
-            logger.debug(f"Found signers file in current directory")
+            logger.debug("Found signers file in current directory")
 
         # 2. Action directory (when running as GitHub Action)
         # Check if GITHUB_ACTION_PATH is set and look there
@@ -281,7 +280,7 @@ class TagOperations:
                 if action_signers.exists():
                     signers_file = action_signers
                     source_description = "GitHub Action directory"
-                    logger.debug(f"Found signers file in action directory")
+                    logger.debug("Found signers file in action directory")
 
         # 3. Git config
         if not signers_file:
@@ -329,7 +328,7 @@ class TagOperations:
         else:
             logger.warning(f"No .ssh-allowed-signers file found in any fallback location (checked cwd: {Path.cwd()})")
 
-    def parse_tag_location(self, location: str) -> Tuple[str, str, str]:
+    def parse_tag_location(self, location: str) -> tuple[str, str, str]:
         """Parse a tag location string into components.
 
         Supports formats:
@@ -368,7 +367,7 @@ class TagOperations:
         logger.debug(f"Parsed location: owner={owner}, repo={repo}, tag={tag}")
         return owner, repo, tag
 
-    def _extract_tagger_info(self, tag_object: str) -> Tuple[Optional[str], Optional[str]]:
+    def _extract_tagger_info(self, tag_object: str) -> tuple[str | None, str | None]:
         """Extract tagger name and email from tag object.
 
         Parses the 'tagger' line in a Git tag object to extract the
@@ -406,7 +405,7 @@ class TagOperations:
         logger.debug("No tagger information found in tag object")
         return None, None
 
-    def _extract_tag_date(self, tag_object: str) -> Optional[str]:
+    def _extract_tag_date(self, tag_object: str) -> str | None:
         """Extract tag creation date from tag object.
 
         Args:
@@ -431,7 +430,8 @@ class TagOperations:
         if match:
             timestamp = int(match.group("timestamp"))
             # Convert to ISO 8601 format
-            from datetime import datetime, timezone as dt_timezone
+            from datetime import datetime
+            from datetime import timezone as dt_timezone
 
             dt = datetime.fromtimestamp(timestamp, tz=dt_timezone.utc)
             iso_date = dt.isoformat()
@@ -440,7 +440,7 @@ class TagOperations:
 
         return None
 
-    def _extract_tag_message(self, tag_object: str) -> Optional[str]:
+    def _extract_tag_message(self, tag_object: str) -> str | None:
         """Extract tag message from tag object.
 
         The tag message is everything after the header lines
@@ -546,7 +546,7 @@ class TagOperations:
         self,
         owner: str,
         repo: str,
-        tag: Optional[str] = None,
+        tag: str | None = None,
     ) -> RepositoryInfo:
         """Build a RepositoryInfo object from components.
 

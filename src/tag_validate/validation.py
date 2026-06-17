@@ -18,7 +18,6 @@ Typical usage:
 
 import logging
 import re
-from typing import Optional
 
 from packaging.version import InvalidVersion, Version
 
@@ -474,7 +473,7 @@ class TagValidator:
         self,
         version1: str,
         version2: str,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Compare two version strings.
 
         Args:

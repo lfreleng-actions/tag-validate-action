@@ -208,19 +208,20 @@ class ValidationWorkflow:
 
 
             # Only enforce type requirements if explicitly configured
-            if self.config.require_semver or self.config.require_calver:
-                if not self._check_version_requirements(version_result):
-                    result.is_valid = False
-                    # Add specific error message about version type mismatch
-                    required_types = []
-                    if self.config.require_semver:
-                        required_types.append("semver")
-                    if self.config.require_calver:
-                        required_types.append("calver")
-                    result.add_error(
-                        f"Version type '{version_result.version_type}' does not match required type(s): {', '.join(required_types)}"
-                    )
-                    return result
+            if (
+                self.config.require_semver or self.config.require_calver
+            ) and not self._check_version_requirements(version_result):
+                result.is_valid = False
+                # Add specific error message about version type mismatch
+                required_types = []
+                if self.config.require_semver:
+                    required_types.append("semver")
+                if self.config.require_calver:
+                    required_types.append("calver")
+                result.add_error(
+                    f"Version type '{version_result.version_type}' does not match required type(s): {', '.join(required_types)}"
+                )
+                return result
             # Otherwise accept any type (including "other")
         else:
             # Skip version validation entirely (legacy flag support)
@@ -1298,10 +1299,7 @@ class ValidationWorkflow:
             if result.config.require_signed or result.config.require_unsigned or result.config.allowed_signature_types:
                 # Check if signature meets requirements
                 signature_valid = self._check_signature_requirements_status(result.signature_info, result.config)
-                if signature_valid:
-                    signature_status = " ✅"
-                else:
-                    signature_status = " ❌"
+                signature_status = " ✅" if signature_valid else " ❌"
 
             lines.append(f"Tag Signing{signature_status}")
 
@@ -1422,21 +1420,20 @@ class ValidationWorkflow:
             if signature_info.type not in config.allowed_signature_types:
                 return False
             # Type is allowed - check for hard errors
-            if signature_info.type in ["invalid", "lightweight"]:
-                return False
-            return True
+            return signature_info.type not in ["invalid", "lightweight"]
 
         # Check if signature is required (legacy boolean mode)
         elif config.require_signed:
-            if signature_info.type in ["unsigned", "lightweight", "gpg-unverifiable", "invalid"]:
-                return False
-            return True
+            return signature_info.type not in [
+                "unsigned",
+                "lightweight",
+                "gpg-unverifiable",
+                "invalid",
+            ]
 
         # Check if unsigned is explicitly required
         elif config.require_unsigned:
-            if signature_info.type != "unsigned":
-                return False
-            return True
+            return signature_info.type == "unsigned"
 
         # No signature requirements - always valid
         return True

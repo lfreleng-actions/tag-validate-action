@@ -13,7 +13,7 @@ This module defines type-safe data structures for:
 """
 
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,11 +26,11 @@ class TagInfo(BaseModel):
         ..., description="Type of tag (lightweight or annotated)"
     )
     commit_sha: str = Field(..., description="Commit SHA that the tag points to")
-    tagger_name: Optional[str] = Field(None, description="Name of the person who created the tag")
-    tagger_email: Optional[str] = Field(None, description="Email of the person who created the tag")
-    tag_date: Optional[str] = Field(None, description="ISO 8601 timestamp when tag was created")
-    tag_message: Optional[str] = Field(None, description="Tag message (for annotated tags)")
-    remote_url: Optional[str] = Field(None, description="Remote repository URL if applicable")
+    tagger_name: str | None = Field(None, description="Name of the person who created the tag")
+    tagger_email: str | None = Field(None, description="Email of the person who created the tag")
+    tag_date: str | None = Field(None, description="ISO 8601 timestamp when tag was created")
+    tag_message: str | None = Field(None, description="Tag message (for annotated tags)")
+    remote_url: str | None = Field(None, description="Remote repository URL if applicable")
 
 
 class SignatureInfo(BaseModel):
@@ -40,10 +40,10 @@ class SignatureInfo(BaseModel):
         ..., description="Type of signature or reason for no signature"
     )
     verified: bool = Field(False, description="Whether the signature was verified locally")
-    key_id: Optional[str] = Field(None, description="GPG key ID (short or long form)")
-    fingerprint: Optional[str] = Field(None, description="Full key fingerprint (GPG or SSH)")
-    signer_email: Optional[str] = Field(None, description="Email address from the signature")
-    signature_data: Optional[str] = Field(None, description="Raw signature data")
+    key_id: str | None = Field(None, description="GPG key ID (short or long form)")
+    fingerprint: str | None = Field(None, description="Full key fingerprint (GPG or SSH)")
+    signer_email: str | None = Field(None, description="Email address from the signature")
+    signature_data: str | None = Field(None, description="Raw signature data")
 
 
 class GPGKeyInfo(BaseModel):
@@ -51,17 +51,17 @@ class GPGKeyInfo(BaseModel):
 
     id: int = Field(..., description="GitHub's internal ID for this key")
     key_id: str = Field(..., description="GPG key ID (e.g., '3262EFF25BA0D270')")
-    name: Optional[str] = Field(None, description="User-provided name/description for the key")
-    primary_key_id: Optional[int] = Field(None, description="ID of primary key if this is a subkey")
+    name: str | None = Field(None, description="User-provided name/description for the key")
+    primary_key_id: int | None = Field(None, description="ID of primary key if this is a subkey")
     emails: list[str] = Field(default_factory=list, description="Email addresses associated with key")
     can_sign: bool = Field(False, description="Whether this key can be used for signing")
     can_encrypt_comms: bool = Field(False, description="Whether key can encrypt communications")
     can_encrypt_storage: bool = Field(False, description="Whether key can encrypt storage")
     can_certify: bool = Field(False, description="Whether key can certify other keys")
     created_at: str = Field(..., description="ISO 8601 timestamp when key was added to GitHub")
-    expires_at: Optional[str] = Field(None, description="ISO 8601 timestamp when key expires")
+    expires_at: str | None = Field(None, description="ISO 8601 timestamp when key expires")
     revoked: bool = Field(False, description="Whether the key has been revoked")
-    raw_key: Optional[str] = Field(None, description="Raw PGP public key block")
+    raw_key: str | None = Field(None, description="Raw PGP public key block")
     subkeys: list["GPGKeyInfo"] = Field(default_factory=list, description="List of subkeys associated with this key")
 
 
@@ -78,9 +78,9 @@ class GerritAccountInfo(BaseModel):
     """Information about a Gerrit account."""
 
     account_id: int = Field(..., description="Gerrit account ID")
-    name: Optional[str] = Field(None, description="Account display name")
-    email: Optional[str] = Field(None, description="Primary email address")
-    username: Optional[str] = Field(None, description="Username")
+    name: str | None = Field(None, description="Account display name")
+    email: str | None = Field(None, description="Primary email address")
+    username: str | None = Field(None, description="Username")
     status: str = Field(..., description="Account status")
 
 
@@ -91,7 +91,7 @@ class GerritSSHKeyInfo(BaseModel):
     ssh_public_key: str = Field(..., description="SSH public key data")
     encoded_key: str = Field(..., description="Base64 encoded key")
     algorithm: str = Field(..., description="Key algorithm (e.g., ssh-rsa, ssh-ed25519)")
-    comment: Optional[str] = Field(None, description="Key comment")
+    comment: str | None = Field(None, description="Key comment")
     valid: bool = Field(..., description="Whether the key is valid")
 
 
@@ -111,8 +111,8 @@ class GitHubVerificationInfo(BaseModel):
 
     verified: bool = Field(..., description="Whether GitHub verified the signature")
     reason: str = Field(..., description="GitHub's reason code for verification status")
-    signature: Optional[str] = Field(None, description="The signature that was extracted")
-    payload: Optional[str] = Field(None, description="The value that was signed")
+    signature: str | None = Field(None, description="The signature that was extracted")
+    payload: str | None = Field(None, description="The value that was signed")
 
 
 class KeyVerificationResult(BaseModel):
@@ -125,20 +125,20 @@ class KeyVerificationResult(BaseModel):
     user_enumerated: bool = Field(
         False, description="Whether the username was auto-detected from email"
     )
-    key_info: Optional[GPGKeyInfo | SSHKeyInfo | GerritGPGKeyInfo | GerritSSHKeyInfo] = Field(
+    key_info: GPGKeyInfo | SSHKeyInfo | GerritGPGKeyInfo | GerritSSHKeyInfo | None = Field(
         None, description="Full key information from API if found"
     )
     service: str = Field("github", description="Service that was checked (github or gerrit)")
-    server: Optional[str] = Field(None, description="Server hostname for Gerrit")
-    user_name: Optional[str] = Field(None, description="User's display name")
-    user_email: Optional[str] = Field(None, description="User's email address")
+    server: str | None = Field(None, description="Server hostname for Gerrit")
+    user_name: str | None = Field(None, description="User's display name")
+    user_email: str | None = Field(None, description="User's email address")
 
 
 class VersionInfo(BaseModel):
     """Information about version string parsing and validation."""
 
     raw: str = Field(..., description="Original version string")
-    normalized: Optional[str] = Field(None, description="Normalized version string (without prefix)")
+    normalized: str | None = Field(None, description="Normalized version string (without prefix)")
     is_valid: bool = Field(False, description="Whether version is valid")
     version_type: Literal["semver", "calver", "both", "other"] = Field(
         "other", description="Type of version format detected"
@@ -149,18 +149,18 @@ class VersionInfo(BaseModel):
     )
 
     # SemVer fields
-    major: Optional[int] = Field(None, description="Major version number (SemVer)")
-    minor: Optional[int] = Field(None, description="Minor version number (SemVer)")
-    patch: Optional[int] = Field(None, description="Patch version number (SemVer)")
-    prerelease: Optional[str] = Field(None, description="Pre-release identifier (SemVer)")
-    build_metadata: Optional[str] = Field(None, description="Build metadata (SemVer)")
+    major: int | None = Field(None, description="Major version number (SemVer)")
+    minor: int | None = Field(None, description="Minor version number (SemVer)")
+    patch: int | None = Field(None, description="Patch version number (SemVer)")
+    prerelease: str | None = Field(None, description="Pre-release identifier (SemVer)")
+    build_metadata: str | None = Field(None, description="Build metadata (SemVer)")
 
     # CalVer fields
-    year: Optional[int] = Field(None, description="Year (CalVer)")
-    month: Optional[int] = Field(None, description="Month (CalVer)")
-    day: Optional[int] = Field(None, description="Day (CalVer)")
-    micro: Optional[int] = Field(None, description="Micro version (CalVer)")
-    modifier: Optional[str] = Field(None, description="Version modifier (CalVer)")
+    year: int | None = Field(None, description="Year (CalVer)")
+    month: int | None = Field(None, description="Month (CalVer)")
+    day: int | None = Field(None, description="Day (CalVer)")
+    micro: int | None = Field(None, description="Micro version (CalVer)")
+    modifier: str | None = Field(None, description="Version modifier (CalVer)")
 
     # Validation errors
     errors: list[str] = Field(default_factory=list, description="Validation errors")
@@ -177,21 +177,21 @@ class ValidationConfig(BaseModel):
     # Signature requirements
     require_signed: bool = Field(False, description="Require tag to be signed")
     require_unsigned: bool = Field(False, description="Require tag to be unsigned")
-    allowed_signature_types: Optional[list[str]] = Field(None, description="Specific signature types allowed (gpg, ssh, gpg-unverifiable, unsigned)")
+    allowed_signature_types: list[str] | None = Field(None, description="Specific signature types allowed (gpg, ssh, gpg-unverifiable, unsigned)")
 
     # GitHub verification
     require_github: bool = Field(False, description="Verify signing key on GitHub")
 
     # Gerrit verification
     require_gerrit: bool = Field(False, description="Verify signing key on Gerrit")
-    gerrit_server: Optional[str] = Field(None, description="Gerrit server hostname or URL")
+    gerrit_server: str | None = Field(None, description="Gerrit server hostname or URL")
 
     # Version filtering
     reject_development: bool = Field(False, description="Reject development versions")
     allow_prefix: bool = Field(True, description="Allow 'v' prefix on versions")
 
     # Configuration metadata
-    config_source: Optional[str] = Field(None, description="Source of configuration")
+    config_source: str | None = Field(None, description="Source of configuration")
 
 
 class ValidationResult(BaseModel):
@@ -201,9 +201,9 @@ class ValidationResult(BaseModel):
     is_valid: bool = Field(True, description="Overall validation result")
 
     # Component results
-    tag_info: Optional[TagInfo] = Field(None, description="Tag metadata")
-    version_info: Optional[VersionInfo] = Field(None, description="Version validation result")
-    signature_info: Optional[SignatureInfo] = Field(None, description="Signature information")
+    tag_info: TagInfo | None = Field(None, description="Tag metadata")
+    version_info: VersionInfo | None = Field(None, description="Version validation result")
+    signature_info: SignatureInfo | None = Field(None, description="Signature information")
     key_verifications: list[KeyVerificationResult] = Field(
         default_factory=list, description="List of key verification results (GitHub and/or Gerrit)"
     )
@@ -242,5 +242,5 @@ class RepositoryInfo(BaseModel):
     owner: str = Field(..., description="Repository owner (org or user)")
     name: str = Field(..., description="Repository name")
     clone_url: str = Field(..., description="HTTPS clone URL")
-    web_url: Optional[str] = Field(None, description="Web URL to repository")
-    tag: Optional[str] = Field(None, description="Specific tag being validated")
+    web_url: str | None = Field(None, description="Web URL to repository")
+    tag: str | None = Field(None, description="Specific tag being validated")

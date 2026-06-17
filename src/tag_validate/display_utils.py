@@ -8,13 +8,12 @@ This module provides shared display formatting functions to ensure
 consistent output across different commands and workflows.
 """
 
-from typing import Optional
 
 
 def format_user_details(
-    username: Optional[str] = None,
-    email: Optional[str] = None,
-    name: Optional[str] = None,
+    username: str | None = None,
+    email: str | None = None,
+    name: str | None = None,
 ) -> list[str]:
     """
     Format user details as a list of bullet points.
@@ -51,7 +50,7 @@ def format_user_details(
 
 def should_display_server(
     service: str,
-    server: Optional[str] = None,
+    server: str | None = None,
 ) -> bool:
     """
     Determine if server information should be displayed.
@@ -87,8 +86,8 @@ def should_display_server(
 
 def format_server_display(
     service: str,
-    server: Optional[str] = None,
-) -> Optional[str]:
+    server: str | None = None,
+) -> str | None:
     """
     Format server display string if server should be shown.
 

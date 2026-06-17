@@ -128,8 +128,8 @@ def _normalize_ssh_fingerprint(key_id: str) -> str:
                 decoded = base64.b64decode(hash_part + '==', validate=True)  # Add padding for validation
                 if len(decoded) != 32:
                     raise ValueError(f"SHA256 fingerprint has invalid length: expected 32 bytes, got {len(decoded)}")
-            except Exception:
-                raise ValueError(f"SHA256 fingerprint contains invalid Base64 characters: {hash_part}")
+            except Exception as exc:
+                raise ValueError(f"SHA256 fingerprint contains invalid Base64 characters: {hash_part}") from exc
 
     elif "md5:" in key_lower:
         # Extract just the MD5: part
@@ -612,7 +612,7 @@ def verify_gerrit(
                             console.print_json(data={"test_mode": True, "success": False, "error": error_msg})
                         else:
                             console.print(f"[red]❌ {error_msg}[/red]")
-                        raise typer.Exit(1)
+                        raise typer.Exit(1) from e
                 else:  # GPG
                     if json_output:
                         result = {
@@ -635,7 +635,7 @@ def verify_gerrit(
                     console.print_json(data={"test_mode": True, "success": False, "error": str(e)})
                 else:
                     console.print(f"[red]❌ Test failed: {e}[/red]")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
 
         # Run test mode and return
         asyncio.run(_test_mode())
@@ -660,33 +660,32 @@ def verify_gerrit(
 
             # Resolve credentials: CLI args > netrc > environment
             effective_host = server if server else f"gerrit.{github_org}.org"
-            if not gerrit_username or not gerrit_password:
-                if not no_netrc:
-                    try:
-                        netrc_creds = get_credentials_for_host(
-                            host=effective_host,
-                            netrc_file=netrc_file,
-                            use_netrc=True,
-                            netrc_optional=netrc_optional,
-                        )
-                        if netrc_creds:
-                            if not gerrit_username:
-                                gerrit_username = netrc_creds.login
-                            if not gerrit_password:
-                                gerrit_password = netrc_creds.password
-                            if not json_output:
-                                console.print("[dim]🔑 Using credentials from .netrc[/dim]")
-                    except NetrcParseError as e:
+            if (not gerrit_username or not gerrit_password) and not no_netrc:
+                try:
+                    netrc_creds = get_credentials_for_host(
+                        host=effective_host,
+                        netrc_file=netrc_file,
+                        use_netrc=True,
+                        netrc_optional=netrc_optional,
+                    )
+                    if netrc_creds:
+                        if not gerrit_username:
+                            gerrit_username = netrc_creds.login
+                        if not gerrit_password:
+                            gerrit_password = netrc_creds.password
                         if not json_output:
-                            console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
-                    except FileNotFoundError:
-                        if not netrc_optional:
-                            error_msg = "No .netrc file found and --netrc-required set"
-                            if json_output:
-                                console.print_json(data={"success": False, "error": error_msg})
-                            else:
-                                console.print(f"[red]❌ {error_msg}[/red]")
-                            raise typer.Exit(EXIT_MISSING_CREDENTIALS)
+                            console.print("[dim]🔑 Using credentials from .netrc[/dim]")
+                except NetrcParseError as e:
+                    if not json_output:
+                        console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
+                except FileNotFoundError as exc:
+                    if not netrc_optional:
+                        error_msg = "No .netrc file found and --netrc-required set"
+                        if json_output:
+                            console.print_json(data={"success": False, "error": error_msg})
+                        else:
+                            console.print(f"[red]❌ {error_msg}[/red]")
+                        raise typer.Exit(EXIT_MISSING_CREDENTIALS) from exc
 
             # Auto-detect or validate key type
             detected_type = key_type
@@ -734,7 +733,7 @@ def verify_gerrit(
                     except Exception as e:
                         error_msg = f"Failed to find Gerrit account for '{owner}': {e}"
                         console.print_json(data={"success": False, "error": error_msg})
-                        raise typer.Exit(EXIT_INVALID_INPUT)
+                        raise typer.Exit(EXIT_INVALID_INPUT) from e
 
                     # Verify the key
                     if detected_type == "gpg":
@@ -769,10 +768,10 @@ def verify_gerrit(
                                 error_msg = f"Gerrit account not found for '{owner}'"
                                 console.print(f"[red]❌ {error_msg}[/red]")
                                 raise typer.Exit(EXIT_INVALID_INPUT)
-                        except Exception:
+                        except Exception as exc:
                             error_msg = f"Failed to find Gerrit account for '{owner}'"
                             console.print(f"[red]❌ {error_msg}[/red]")
-                            raise typer.Exit(EXIT_INVALID_INPUT)
+                            raise typer.Exit(EXIT_INVALID_INPUT) from exc
 
                         # Verify the key
                         if detected_type == "gpg":
@@ -839,7 +838,7 @@ def verify_gerrit(
                     logger.exception("Unexpected error during verification")
                 else:
                     logger.error(f"Unexpected error during verification: {e}")
-            raise typer.Exit(EXIT_UNEXPECTED_ERROR)
+            raise typer.Exit(EXIT_UNEXPECTED_ERROR) from e
 
     # Run async function
     asyncio.run(_verify())
@@ -998,7 +997,7 @@ def verify_github(
                     })
                 else:
                     console.print(f"\n[red]❌ Test Mode: {error_msg}[/red]")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
 
         # Run test mode and return
         asyncio.run(_test_mode())
@@ -1047,7 +1046,7 @@ def verify_github(
                     console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_INVALID_INPUT})
                 else:
                     console.print(f"\n[red]❌ Error:[/red] {e}")
-                raise typer.Exit(EXIT_INVALID_INPUT)
+                raise typer.Exit(EXIT_INVALID_INPUT) from e
 
             # Fetch user details
             user_details = None
@@ -1150,7 +1149,7 @@ def verify_github(
                     logger.exception("Unexpected error during verification")
                 else:
                     logger.error(f"Unexpected error during verification: {e}")
-            raise typer.Exit(EXIT_UNEXPECTED_ERROR)
+            raise typer.Exit(EXIT_UNEXPECTED_ERROR) from e
 
     # Run async function
     asyncio.run(_verify())
@@ -1229,7 +1228,7 @@ def detect(
                 console.print_json(data={"success": False, "error": str(e)})
             else:
                 console.print(f"\n[red]❌ Error:[/red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         except typer.Exit:
             raise
         except Exception as e:
@@ -1241,7 +1240,7 @@ def detect(
                     logger.exception("Unexpected error during signature detection")
                 else:
                     logger.error(f"Unexpected error during signature detection: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     # Run async function
     asyncio.run(_detect())
@@ -1631,7 +1630,7 @@ def validate(
                 logger.exception("Unexpected error during version validation")
             else:
                 logger.error(f"Unexpected error during version validation: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -1878,80 +1877,79 @@ def verify(
             # Resolve Gerrit credentials: CLI args > netrc > environment
             # This is done before parsing require_gerrit to ensure credentials
             # are available when Gerrit verification is requested
-            if require_gerrit and (not gerrit_username or not gerrit_password):
-                if not no_netrc:
-                    # Determine effective host for netrc lookup
-                    if require_gerrit == "true":
-                        # Auto-discovery pattern: we don't know the host yet,
-                        # but we can validate that .netrc exists and is parseable
-                        # when --netrc-required is set. The actual credential
-                        # lookup will happen later in GerritKeysClient.
-                        try:
-                            netrc_path = find_netrc_file(
-                                search_local=True,
-                                explicit_path=netrc_file,
-                            )
-                            if netrc_path is None:
-                                if not netrc_optional:
-                                    error_msg = (
-                                        "No .netrc file found and "
-                                        "--netrc-required set"
+            if require_gerrit and (not gerrit_username or not gerrit_password) and not no_netrc:
+                # Determine effective host for netrc lookup
+                if require_gerrit == "true":
+                    # Auto-discovery pattern: we don't know the host yet,
+                    # but we can validate that .netrc exists and is parseable
+                    # when --netrc-required is set. The actual credential
+                    # lookup will happen later in GerritKeysClient.
+                    try:
+                        netrc_path = find_netrc_file(
+                            search_local=True,
+                            explicit_path=netrc_file,
+                        )
+                        if netrc_path is None:
+                            if not netrc_optional:
+                                error_msg = (
+                                    "No .netrc file found and "
+                                    "--netrc-required set"
+                                )
+                                if json_output:
+                                    console.print_json(
+                                        data={
+                                            "success": False,
+                                            "error": error_msg,
+                                        }
                                     )
-                                    if json_output:
-                                        console.print_json(
-                                            data={
-                                                "success": False,
-                                                "error": error_msg,
-                                            }
-                                        )
-                                    else:
-                                        console.print(
-                                            f"[red]❌ {error_msg}[/red]"
-                                        )
-                                    raise typer.Exit(EXIT_MISSING_CREDENTIALS)
-                            else:
-                                # Validate the file is parseable
-                                load_netrc(path=netrc_path, search_local=False)
-                                if not json_output:
+                                else:
                                     console.print(
-                                        "[dim]🔑 .netrc file found; "
-                                        "credentials will be resolved after "
-                                        "Gerrit server discovery[/dim]"
+                                        f"[red]❌ {error_msg}[/red]"
                                     )
-                        except NetrcParseError as e:
+                                raise typer.Exit(EXIT_MISSING_CREDENTIALS)
+                        else:
+                            # Validate the file is parseable
+                            load_netrc(path=netrc_path, search_local=False)
                             if not json_output:
                                 console.print(
-                                    f"[yellow]⚠️  Error parsing "
-                                    f".netrc file: {e}[/yellow]"
+                                    "[dim]🔑 .netrc file found; "
+                                    "credentials will be resolved after "
+                                    "Gerrit server discovery[/dim]"
                                 )
-                    else:
-                        # Specific server provided
-                        effective_host = require_gerrit
-                        try:
-                            netrc_creds = get_credentials_for_host(
-                                host=effective_host,
-                                netrc_file=netrc_file,
-                                use_netrc=True,
-                                netrc_optional=netrc_optional,
+                    except NetrcParseError as e:
+                        if not json_output:
+                            console.print(
+                                f"[yellow]⚠️  Error parsing "
+                                f".netrc file: {e}[/yellow]"
                             )
-                            if netrc_creds:
-                                if not gerrit_username:
-                                    gerrit_username = netrc_creds.login
-                                if not gerrit_password:
-                                    gerrit_password = netrc_creds.password
-                                if not json_output:
-                                    console.print("[dim]🔑 Using credentials from .netrc[/dim]")
-                        except NetrcParseError as e:
+                else:
+                    # Specific server provided
+                    effective_host = require_gerrit
+                    try:
+                        netrc_creds = get_credentials_for_host(
+                            host=effective_host,
+                            netrc_file=netrc_file,
+                            use_netrc=True,
+                            netrc_optional=netrc_optional,
+                        )
+                        if netrc_creds:
+                            if not gerrit_username:
+                                gerrit_username = netrc_creds.login
+                            if not gerrit_password:
+                                gerrit_password = netrc_creds.password
                             if not json_output:
-                                console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
-                        except FileNotFoundError:
-                            if not netrc_optional:
-                                error_msg = "No .netrc file found and --netrc-required set"
-                                if json_output:
-                                    console.print_json(data={"success": False, "error": error_msg})
-                                else:
-                                    console.print(f"[red]❌ {error_msg}[/red]")
-                                raise typer.Exit(EXIT_MISSING_CREDENTIALS)
+                                console.print("[dim]🔑 Using credentials from .netrc[/dim]")
+                    except NetrcParseError as e:
+                        if not json_output:
+                            console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
+                    except FileNotFoundError as exc:
+                        if not netrc_optional:
+                            error_msg = "No .netrc file found and --netrc-required set"
+                            if json_output:
+                                console.print_json(data={"success": False, "error": error_msg})
+                            else:
+                                console.print(f"[red]❌ {error_msg}[/red]")
+                            raise typer.Exit(EXIT_MISSING_CREDENTIALS) from exc
 
             # Parse require_gerrit option
             config_require_gerrit = False
@@ -2001,7 +1999,7 @@ def verify(
                         console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_INVALID_INPUT})
                     else:
                         console.print(f"\n[red]❌ Error:[/red] {e}")
-                    raise typer.Exit(EXIT_INVALID_INPUT)
+                    raise typer.Exit(EXIT_INVALID_INPUT) from e
 
             # Run validation
             # Normalize tag location format (handle owner/repo/tag → owner/repo@tag)
@@ -2057,7 +2055,7 @@ def verify(
                         except Exception as file_error:
                             logger.error(f"Failed to write JSON to file {json_file}: {file_error}")
 
-                    raise typer.Exit(0)
+                    raise typer.Exit(0) from e
                 else:
                     # Re-raise if not a missing tag error or permit_missing is false
                     raise
@@ -2268,7 +2266,7 @@ def verify(
                     logger.exception("Unexpected error during tag verification")
                 else:
                     logger.error(f"Unexpected error during tag verification: {e}")
-            raise typer.Exit(EXIT_UNEXPECTED_ERROR)
+            raise typer.Exit(EXIT_UNEXPECTED_ERROR) from e
 
     # Run async function
     asyncio.run(_verify())
