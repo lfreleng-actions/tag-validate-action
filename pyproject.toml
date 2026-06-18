@@ -212,3 +212,13 @@ known-first-party = ["tag_validate"]
 # 7 days (rolling window; uv records it as a relative span in uv.lock).
 # Requires uv >= 0.9.17 for the relative-duration ("7 days") form.
 exclude-newer = "7 days"
+
+# Per-package cooldown exceptions: allow specific packages to bypass the
+# global window so urgent security fixes can be pulled in immediately.
+# cryptography is a security-critical component, so it is permanently
+# exempted from the cooldown via a zero-length window ("0 days"): it
+# always resolves to the latest published release, ensuring fixes such
+# as GHSA-537c-gmf6-5ccf are applied without delay. The global 7-day
+# cooldown remains in force for every other dependency.
+[tool.uv.exclude-newer-package]
+cryptography = "0 days"
