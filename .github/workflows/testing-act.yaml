@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: "Install Python package"
         shell: bash
@@ -427,6 +428,7 @@ jobs:
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
           path: test-repo-semver
+          persist-credentials: false
 
       - name: "Checkout test repo - CalVer"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -434,6 +436,7 @@ jobs:
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
           path: test-repo-calver
+          persist-credentials: false
 
       - name: "Test GPG-signed SemVer tag detection"
         shell: bash

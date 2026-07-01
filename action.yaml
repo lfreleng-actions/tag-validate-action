@@ -183,23 +183,25 @@ runs:
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
       shell: bash
       env:
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
-      # The PYTHONPATH write to GITHUB_ENV exposes the action's bundled
-      # source directory to subsequent steps; it is env-by-nature (no output
-      # equivalent) and built from the trusted github.action_path, not from
-      # untrusted input, so the github-env write is safe and intentional.
-      # zizmor evaluates github-env at run-block granularity, so the ignore
-      # must sit on the run: line (a trailing comment on the echo line is
-      # not recognised by this zizmor version).
+        ACTION_PATH: ${{ github.action_path }}
       run: | # zizmor: ignore[github-env]
         # Install dependencies without the package itself to avoid setuptools-scm issues
-        pip install dependamerge>=0.1.19 aiolimiter>=1.2.1 "httpx[http2]>=0.28.1" pydantic>=2.12.5 rich>=14.2.0 typer>=0.21.1 python-gnupg>=0.5.3 cryptography>=46.0.3 packaging>=24.2 pygerrit2>=2.0.15
-        # Add the source directory to PYTHONPATH for direct module access
-        echo "PYTHONPATH=${GITHUB_ACTION_PATH}/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
+        pip install "dependamerge>=0.1.19" "aiolimiter>=1.2.1" "httpx[http2]>=0.28.1" "pydantic>=2.12.5" "rich>=14.2.0" "typer>=0.21.1" "python-gnupg>=0.5.3" "cryptography>=46.0.3" "packaging>=24.2" "pygerrit2>=2.0.15"
+        # Add the source directory to PYTHONPATH for direct module access.
+        # ACTION_PATH originates from github.action_path (trusted), so this
+        # GITHUB_ENV write is required to persist PYTHONPATH across steps.
+        # Strip any CR/LF from the inherited PYTHONPATH first to prevent
+        # newline-based env-file injection into GITHUB_ENV.
+        SAFE_PYTHONPATH="${PYTHONPATH:-}"
+        SAFE_PYTHONPATH="${SAFE_PYTHONPATH//$'\r'/}"
+        SAFE_PYTHONPATH="${SAFE_PYTHONPATH//$'\n'/}"
+        echo "PYTHONPATH=${ACTION_PATH}/src:${SAFE_PYTHONPATH}" >> "$GITHUB_ENV"
 
     - name: 'Verify Python module import'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
       shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         # Test if the Python module can be imported
         echo "🔍 Testing Python module import..."
@@ -211,9 +213,9 @@ runs:
         python -c "import tag_validate; print('✅ tag_validate module imported successfully'); import tag_validate; print('Module location:', tag_validate.__file__)" || {
           echo "❌ Failed to import tag_validate module" >&2
           echo "Directory contents of src/:" >&2
-          ls -la "${{ github.action_path }}/src/" || echo "src/ directory not found" >&2
+          ls -la "${ACTION_PATH}/src/" || echo "src/ directory not found" >&2
           echo "Directory contents of src/tag_validate/:" >&2
-          ls -la "${{ github.action_path }}/src/tag_validate/" || echo "src/tag_validate/ directory not found" >&2
+          ls -la "${ACTION_PATH}/src/tag_validate/" || echo "src/tag_validate/ directory not found" >&2
           exit 1
         }
         echo ""
@@ -369,7 +371,7 @@ runs:
 
         # Determine which CLI invocation method to use
         if [[ "${USE_LOCAL_ACTION}" == "true" ]] || \
-           [[ "${{ github.repository }}" =~ lfreleng-actions/tag-validate-action ]]; then
+           [[ "${GITHUB_REPOSITORY}" =~ lfreleng-actions/tag-validate-action ]]; then
           CLI_CMD="python -m tag_validate.cli"
           echo "Using local action code: ${CLI_CMD}"
         else

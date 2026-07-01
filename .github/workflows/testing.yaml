@@ -36,6 +36,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Test SemVer string - valid"
         uses: ./
@@ -47,17 +49,20 @@ jobs:
       - name: "Verify SemVer output"
         shell: bash
         run: |
-          if [ "${{ steps.semver-valid.outputs.tag_type }}" != "semver" ]; then
+          if [ "${TAG_TYPE}" != "semver" ]; then
             echo "Error: Expected tag_type=semver, got \
-              ${{ steps.semver-valid.outputs.tag_type }}"
+              ${TAG_TYPE}"
             exit 1
           fi
-          if [ "${{ steps.semver-valid.outputs.version_prefix }}" \
+          if [ "${VERSION_PREFIX}" \
             != "false" ]; then
             echo "Error: Expected version_prefix=false"
             exit 1
           fi
           echo "✓ SemVer string validation passed"
+        env:
+          TAG_TYPE: ${{ steps.semver-valid.outputs.tag_type }}
+          VERSION_PREFIX: ${{ steps.semver-valid.outputs.version_prefix }}
 
       - name: "Test SemVer string with v prefix"
         uses: ./
@@ -69,17 +74,20 @@ jobs:
       - name: "Verify prefix detection"
         shell: bash
         run: |
-          if [ "${{ steps.semver-prefix.outputs.version_prefix }}" \
+          if [ "${VERSION_PREFIX}" \
             != "true" ]; then
             echo "Error: Expected version_prefix=true"
             exit 1
           fi
-          if [ "${{ steps.semver-prefix.outputs.development_tag }}" \
+          if [ "${DEVELOPMENT_TAG}" \
             != "true" ]; then
             echo "Error: Expected development_tag=true (beta)"
             exit 1
           fi
           echo "✓ Prefix and development tag detected"
+        env:
+          VERSION_PREFIX: ${{ steps.semver-prefix.outputs.version_prefix }}
+          DEVELOPMENT_TAG: ${{ steps.semver-prefix.outputs.development_tag }}
 
       - name: "Test CalVer string - valid"
         uses: ./
@@ -91,12 +99,14 @@ jobs:
       - name: "Verify CalVer output"
         shell: bash
         run: |
-          if [ "${{ steps.calver-valid.outputs.tag_type }}" != "calver" ]; then
+          if [ "${TAG_TYPE}" != "calver" ]; then
             echo "Error: Expected tag_type=calver, got \
-              ${{ steps.calver-valid.outputs.tag_type }}"
+              ${TAG_TYPE}"
             exit 1
           fi
           echo "✓ CalVer string validation passed"
+        env:
+          TAG_TYPE: ${{ steps.calver-valid.outputs.tag_type }}
 
       - name: "Test CalVer with development identifier"
         uses: ./
@@ -107,12 +117,14 @@ jobs:
       - name: "Verify development tag detection"
         shell: bash
         run: |
-          if [ "${{ steps.calver-dev.outputs.development_tag }}" \
+          if [ "${DEVELOPMENT_TAG}" \
             != "true" ]; then
             echo "Error: Expected development_tag=true"
             exit 1
           fi
           echo "✓ Development tag detected in CalVer"
+        env:
+          DEVELOPMENT_TAG: ${{ steps.calver-dev.outputs.development_tag }}
 
       - name: "Test type mismatch - should fail"
         uses: ./
@@ -139,12 +151,14 @@ jobs:
       - name: "Verify unknown format accepted"
         shell: bash
         run: |
-          if [ "${{ steps.unknown-format.outputs.tag_type }}" \
+          if [ "${TAG_TYPE}" \
             != "other" ]; then
             echo "Error: Expected tag_type=other"
             exit 1
           fi
           echo "✓ Other format accepted with require_type=none"
+        env:
+          TAG_TYPE: ${{ steps.unknown-format.outputs.tag_type }}
 
   ### Test Local Tag Validation (Tag Push Event Simulation) ###
   test-local-tags:
@@ -158,6 +172,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: "Create test tags locally"
@@ -189,11 +204,13 @@ jobs:
       - name: "Verify permit_missing worked"
         shell: bash
         run: |
-          if [ "${{ steps.missing-permitted.outputs.valid }}" != "true" ]; then
+          if [ "${VALID}" != "true" ]; then
             echo "Error: Should succeed with permit_missing=true"
             exit 1
           fi
           echo "✓ permit_missing=true works correctly"
+        env:
+          VALID: ${{ steps.missing-permitted.outputs.valid }}
 
       - name: "Test missing tag with permit_missing=false - should fail"
         uses: ./
@@ -220,6 +237,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Test remote tag - semantic versioning"
         uses: ./
@@ -234,9 +253,13 @@ jobs:
       - name: "Verify remote tag validation"
         shell: bash
         run: |
-          echo "Tag Name: ${{ steps.remote-semver.outputs.tag_name }}"
-          echo "Tag Type: ${{ steps.remote-semver.outputs.tag_type }}"
-          echo "Signing Type: ${{ steps.remote-semver.outputs.signing_type }}"
+          echo "Tag Name: ${TAG_NAME}"
+          echo "Tag Type: ${TAG_TYPE}"
+          echo "Signing Type: ${SIGNING_TYPE}"
+        env:
+          TAG_NAME: ${{ steps.remote-semver.outputs.tag_name }}
+          TAG_TYPE: ${{ steps.remote-semver.outputs.tag_type }}
+          SIGNING_TYPE: ${{ steps.remote-semver.outputs.signing_type }}
 
       - name: "Test remote tag - calendar versioning"
         uses: ./
@@ -293,11 +316,13 @@ jobs:
       - name: "Verify token usage succeeded"
         shell: bash
         run: |
-          if [ "${{ steps.with-token.outputs.valid }}" != "true" ]; then
+          if [ "${VALID}" != "true" ]; then
             echo "Error: Token-authenticated request should have succeeded"
             exit 1
           fi
           echo "✓ Token-authenticated request succeeded"
+        env:
+          VALID: ${{ steps.with-token.outputs.valid }}
 
   ### Test Signature Validation ###
   test-signatures:
@@ -312,6 +337,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
           path: test-repo-semver
@@ -320,6 +346,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
           path: test-repo-calver
@@ -328,16 +355,18 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           path: action-code
 
       - name: "Import GPG test key for signature verification"
         # yamllint disable-line rule:line-length
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         # Allow failure when GPG_PRIVATE_KEY secret is not set
         # (tests will then expect gpg-unverifiable instead of gpg)
         continue-on-error: true
         with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # yamllint disable-line rule:line-length
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }} # zizmor: ignore[secrets-outside-env]
           trust_level: ultimate
 
       - name: "Set GPG key availability flag"
@@ -361,13 +390,15 @@ jobs:
       - name: "Verify string mode reports unsigned"
         shell: bash
         run: |
-          echo "Signing Type: ${{ steps.string-mode.outputs.signing_type }}"
-          if [ "${{ steps.string-mode.outputs.signing_type }}" \
+          echo "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "unsigned" ]; then
             echo "Error: Expected signing_type=unsigned in string mode"
             exit 1
           fi
           echo "✓ String mode correctly reports unsigned"
+        env:
+          SIGNING_TYPE: ${{ steps.string-mode.outputs.signing_type }}
 
       - name: "Test GPG-signed tag detection (semver)"
         uses: ./action-code
@@ -378,26 +409,28 @@ jobs:
       - name: "Verify GPG signature detection (semver)"
         shell: bash
         run: |
-          echo "Signing Type: ${{ steps.gpg-semver.outputs.signing_type }}"
-          echo "GPG Key Available: ${{ env.GPG_KEY_AVAILABLE }}"
+          echo "Signing Type: ${SIGNING_TYPE}"
+          echo "GPG Key Available: ${GPG_KEY_AVAILABLE}"
 
           # Expected result depends on whether GPG key is available
-          if [ "${{ env.GPG_KEY_AVAILABLE }}" = "true" ]; then
+          if [ "${GPG_KEY_AVAILABLE}" = "true" ]; then
             # With key: should verify as 'gpg'
-            if [ "${{ steps.gpg-semver.outputs.signing_type }}" != "gpg" ]; then
+            if [ "${SIGNING_TYPE}" != "gpg" ]; then
               echo "Error: Expected signing_type=gpg (key available)"
               exit 1
             fi
             echo "✓ GPG signature verified correctly"
           else
             # Without key: should be 'gpg-unverifiable'
-            if [ "${{ steps.gpg-semver.outputs.signing_type }}" \
+            if [ "${SIGNING_TYPE}" \
               != "gpg-unverifiable" ]; then
               echo "Error: Expected signing_type=gpg-unverifiable"
               exit 1
             fi
             echo "✓ GPG signature detected but unverifiable"
           fi
+        env:
+          SIGNING_TYPE: ${{ steps.gpg-semver.outputs.signing_type }}
 
       - name: "Test SSH-signed tag detection (semver)"
         uses: ./action-code
@@ -408,13 +441,15 @@ jobs:
       - name: "Verify SSH signature detection (semver)"
         shell: bash
         run: |
-          echo "Signing Type: ${{ steps.ssh-semver.outputs.signing_type }}"
-          if [ "${{ steps.ssh-semver.outputs.signing_type }}" \
+          echo "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "ssh" ]; then
             echo "Error: Expected signing_type=ssh for v0.1.3-ssh-signed"
             exit 1
           fi
           echo "✓ SSH signature detected correctly"
+        env:
+          SIGNING_TYPE: ${{ steps.ssh-semver.outputs.signing_type }}
 
       - name: "Test unsigned tag detection (semver)"
         uses: ./action-code
@@ -426,13 +461,15 @@ jobs:
         shell: bash
         run: |
           echo \
-            "Signing Type: ${{ steps.unsigned-semver.outputs.signing_type }}"
-          if [ "${{ steps.unsigned-semver.outputs.signing_type }}" \
+            "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "unsigned" ]; then
             echo "Error: Expected signing_type=unsigned for v0.1.2-unsigned"
             exit 1
           fi
           echo "✓ Unsigned tag detected correctly"
+        env:
+          SIGNING_TYPE: ${{ steps.unsigned-semver.outputs.signing_type }}
 
       - name: "Test GPG-signed tag detection (calver)"
         uses: ./action-code
@@ -443,26 +480,28 @@ jobs:
       - name: "Verify GPG signature detection (calver)"
         shell: bash
         run: |
-          echo "Signing Type: ${{ steps.gpg-calver.outputs.signing_type }}"
-          echo "GPG Key Available: ${{ env.GPG_KEY_AVAILABLE }}"
+          echo "Signing Type: ${SIGNING_TYPE}"
+          echo "GPG Key Available: ${GPG_KEY_AVAILABLE}"
 
           # Expected result depends on whether GPG key is available
-          if [ "${{ env.GPG_KEY_AVAILABLE }}" = "true" ]; then
+          if [ "${GPG_KEY_AVAILABLE}" = "true" ]; then
             # With key: should verify as 'gpg'
-            if [ "${{ steps.gpg-calver.outputs.signing_type }}" != "gpg" ]; then
+            if [ "${SIGNING_TYPE}" != "gpg" ]; then
               echo "Error: Expected signing_type=gpg (key available)"
               exit 1
             fi
             echo "✓ GPG signature verified correctly"
           else
             # Without key: should be 'gpg-unverifiable'
-            if [ "${{ steps.gpg-calver.outputs.signing_type }}" \
+            if [ "${SIGNING_TYPE}" \
               != "gpg-unverifiable" ]; then
               echo "Error: Expected signing_type=gpg-unverifiable"
               exit 1
             fi
             echo "✓ GPG signature detected but unverifiable"
           fi
+        env:
+          SIGNING_TYPE: ${{ steps.gpg-calver.outputs.signing_type }}
 
       - name: "Test SSH-signed tag detection (calver)"
         uses: ./action-code
@@ -473,13 +512,15 @@ jobs:
       - name: "Verify SSH signature detection (calver)"
         shell: bash
         run: |
-          echo "Signing Type: ${{ steps.ssh-calver.outputs.signing_type }}"
-          if [ "${{ steps.ssh-calver.outputs.signing_type }}" \
+          echo "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "ssh" ]; then
             echo "Error: Expected signing_type=ssh for 2025.1.3-ssh-signed"
             exit 1
           fi
           echo "✓ SSH signature detected correctly (calver)"
+        env:
+          SIGNING_TYPE: ${{ steps.ssh-calver.outputs.signing_type }}
 
       - name: "Test unsigned tag detection (calver)"
         uses: ./action-code
@@ -491,13 +532,15 @@ jobs:
         shell: bash
         run: |
           echo \
-            "Signing Type: ${{ steps.unsigned-calver.outputs.signing_type }}"
-          if [ "${{ steps.unsigned-calver.outputs.signing_type }}" \
+            "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "unsigned" ]; then
             echo "Error: Expected signing_type=unsigned for 2025.1.2-unsigned"
             exit 1
           fi
           echo "✓ Unsigned tag detected correctly (calver)"
+        env:
+          SIGNING_TYPE: ${{ steps.unsigned-calver.outputs.signing_type }}
 
       - name: "Test GPG-unverifiable tag detection (semver)"
         uses: ./action-code
@@ -507,17 +550,18 @@ jobs:
 
       - name: "Verify GPG-unverifiable signature detection (semver)"
         shell: bash
-        # yamllint disable rule:line-length
         run: |
-          echo "Signing Type: ${{ steps.gpg-unverifiable-semver.outputs.signing_type }}"
-          if [ "${{ steps.gpg-unverifiable-semver.outputs.signing_type }}" \
+          echo "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "gpg-unverifiable" ]; then
             echo "Error: Expected signing_type=gpg-unverifiable for" \
                  "v0.1.6-gpg-unknown (signed with unknown key)"
             exit 1
           fi
           echo "✓ GPG-unverifiable signature detected correctly (semver)"
-        # yamllint enable rule:line-length
+        env:
+          # yamllint disable-line rule:line-length
+          SIGNING_TYPE: ${{ steps.gpg-unverifiable-semver.outputs.signing_type }}
 
       - name: "Test GPG-unverifiable tag detection (calver)"
         uses: ./action-code
@@ -527,17 +571,18 @@ jobs:
 
       - name: "Verify GPG-unverifiable signature detection (calver)"
         shell: bash
-        # yamllint disable rule:line-length
         run: |
-          echo "Signing Type: ${{ steps.gpg-unverifiable-calver.outputs.signing_type }}"
-          if [ "${{ steps.gpg-unverifiable-calver.outputs.signing_type }}" \
+          echo "Signing Type: ${SIGNING_TYPE}"
+          if [ "${SIGNING_TYPE}" \
             != "gpg-unverifiable" ]; then
             echo "Error: Expected signing_type=gpg-unverifiable for" \
                  "2025.1.6-gpg-unknown (signed with unknown key)"
             exit 1
           fi
           echo "✓ GPG-unverifiable signature detected correctly (calver)"
-        # yamllint enable rule:line-length
+        env:
+          # yamllint disable-line rule:line-length
+          SIGNING_TYPE: ${{ steps.gpg-unverifiable-calver.outputs.signing_type }}
 
       - name: "Test require_signed=true with GPG-unverifiable tag (should fail)"
         uses: ./action-code
@@ -550,13 +595,15 @@ jobs:
       - name: "Verify require_signed=true rejects GPG-unverifiable tag"
         shell: bash
         run: |
-          if [ "${{ steps.require-signed-unverifiable.outcome }}" \
+          if [ "${UNVERIF_OUTCOME}" \
             == "success" ]; then
             echo "Error: require_signed=true should reject" \
                  "gpg-unverifiable signatures"
             exit 1
           fi
           echo "✓ require_signed=true correctly rejected gpg-unverifiable tag"
+        env:
+          UNVERIF_OUTCOME: ${{ steps.require-signed-unverifiable.outcome }}
 
       - name: "Test require_signed=true with GPG tag"
         uses: ./action-code
@@ -571,9 +618,9 @@ jobs:
         run: |
           # SECURITY: require_signed=true now rejects gpg-unverifiable
           # This test passes only if GPG key is available (signature verifiable)
-          if [ "${{ env.GPG_KEY_AVAILABLE }}" = "true" ]; then
+          if [ "${GPG_KEY_AVAILABLE}" = "true" ]; then
             # With key: signature is verifiable, should pass
-            if [ "${{ steps.require-signed-gpg.outcome }}" \
+            if [ "${REQUIRE_SIGNED_GPG_OUTCOME}" \
               != "success" ]; then
               echo "Error: require_signed=true should pass with" \
                    "verifiable GPG signature"
@@ -582,7 +629,7 @@ jobs:
             echo "✓ require_signed=true accepted verifiable signature"
           else
             # Without key: signature is unverifiable, should fail
-            if [ "${{ steps.require-signed-gpg.outcome }}" \
+            if [ "${REQUIRE_SIGNED_GPG_OUTCOME}" \
               != "failure" ]; then
               echo "Error: require_signed=true should reject" \
                    "unverifiable GPG signature"
@@ -590,6 +637,8 @@ jobs:
             fi
             echo "✓ require_signed=true rejected unverifiable signature"
           fi
+        env:
+          REQUIRE_SIGNED_GPG_OUTCOME: ${{ steps.require-signed-gpg.outcome }}
 
       - name: "Test require_signed=true with SSH tag (should pass)"
         uses: ./action-code
@@ -609,11 +658,13 @@ jobs:
       - name: "Verify require_signed=true rejected unsigned tag"
         shell: bash
         run: |
-          if [ "${{ steps.require-signed-fail.outcome }}" == "success" ]; then
+          if [ "${REQUIRE_SIGNED_FAIL_OUTCOME}" == "success" ]; then
             echo "Error: require_signed=true should reject unsigned tags"
             exit 1
           fi
           echo "✓ require_signed=true correctly rejected unsigned tag"
+        env:
+          REQUIRE_SIGNED_FAIL_OUTCOME: ${{ steps.require-signed-fail.outcome }}
 
       - name: "Test require_signed=false with unsigned tag (should pass)"
         uses: ./action-code
@@ -640,6 +691,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: "Setup SSH allowed signers file"
@@ -763,6 +815,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: "Create unsigned tag"
@@ -797,16 +850,19 @@ jobs:
       - name: "Verify case insensitivity"
         shell: bash
         run: |
-          if [ "${{ steps.case-test.outputs.tag_type }}" != "semver" ]; then
+          if [ "${TAG_TYPE}" != "semver" ]; then
             echo "Error: Case insensitivity failed for require_type"
             exit 1
           fi
-          if [ "${{ steps.case-test.outputs.signing_type }}" != "unsigned" ]
+          if [ "${SIGNING_TYPE}" != "unsigned" ]
           then
             echo "Error: Case insensitivity failed for require_signed"
             exit 1
           fi
           echo "✓ Case insensitive options work correctly"
+        env:
+          TAG_TYPE: ${{ steps.case-test.outputs.tag_type }}
+          SIGNING_TYPE: ${{ steps.case-test.outputs.signing_type }}
 
   ### Test Development Tag Detection ###
   test-development-tags:
@@ -819,6 +875,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Test alpha tag"
         uses: ./
@@ -829,10 +887,12 @@ jobs:
       - name: "Verify alpha detected"
         shell: bash
         run: |
-          if [ "${{ steps.alpha.outputs.development_tag }}" != "true" ]; then
+          if [ "${DEVELOPMENT_TAG}" != "true" ]; then
             echo "Error: alpha not detected as development"
             exit 1
           fi
+        env:
+          DEVELOPMENT_TAG: ${{ steps.alpha.outputs.development_tag }}
 
       - name: "Test beta tag"
         uses: ./
@@ -867,12 +927,14 @@ jobs:
       - name: "Verify stable not flagged as dev"
         shell: bash
         run: |
-          if [ "${{ steps.stable.outputs.development_tag }}" \
+          if [ "${DEVELOPMENT_TAG}" \
             != "false" ]; then
             echo "Error: Stable tag incorrectly flagged as development"
             exit 1
           fi
           echo "✓ Development tag detection works correctly"
+        env:
+          DEVELOPMENT_TAG: ${{ steps.stable.outputs.development_tag }}
 
   ### Test All Input Combinations ###
   test-input-priority:
@@ -885,6 +947,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Test tag_location takes priority over tag_string"
         uses: ./
@@ -898,12 +962,14 @@ jobs:
       - name: "Verify tag_location was used"
         shell: bash
         run: |
-          tag_name="${{ steps.priority-test.outputs.tag_name }}"
-          if [[ "$tag_name" == *"ignored"* ]]; then
+          resolved_tag="${TAG_NAME}"
+          if [[ "$resolved_tag" == *"ignored"* ]]; then
             echo "Error: tag_string was used instead of tag_location"
             exit 1
           fi
           echo "✓ Input priority works correctly"
+        env:
+          TAG_NAME: ${{ steps.priority-test.outputs.tag_name }}
 
   ### Test Edge Cases ###
   test-edge-cases:
@@ -916,6 +982,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Test empty tag_string with permit_missing=true"
         uses: ./
@@ -940,11 +1008,13 @@ jobs:
       - name: "Verify multiple dev keywords detected"
         shell: bash
         run: |
-          if [ "${{ steps.multi-dev.outputs.development_tag }}" \
+          if [ "${DEVELOPMENT_TAG}" \
             != "true" ]; then
             echo "Error: Multiple dev keywords not detected"
             exit 1
           fi
+        env:
+          DEVELOPMENT_TAG: ${{ steps.multi-dev.outputs.development_tag }}
 
       - name: "Test uppercase V prefix"
         uses: ./
@@ -955,12 +1025,14 @@ jobs:
       - name: "Verify uppercase V detected"
         shell: bash
         run: |
-          if [ "${{ steps.uppercase-v.outputs.version_prefix }}" \
+          if [ "${VERSION_PREFIX}" \
             != "true" ]; then
             echo "Error: Uppercase V prefix not detected"
             exit 1
           fi
           echo "✓ Edge cases handled correctly"
+        env:
+          VERSION_PREFIX: ${{ steps.uppercase-v.outputs.version_prefix }}
 
   ### Summary ###
   ### Python Package Tests ###
@@ -974,6 +1046,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Set up Python"
         # yamllint disable-line rule:line-length
@@ -1056,6 +1130,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          persist-credentials: false
           repository: lfreleng-actions/test-tags-semantic
           fetch-depth: 0
           path: test-repo-semver
@@ -1064,6 +1139,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          persist-credentials: false
           repository: lfreleng-actions/test-tags-calver
           fetch-depth: 0
           path: test-repo-calver
@@ -1072,6 +1148,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          persist-credentials: false
           path: action-code
 
       - name: "Set up Python"
@@ -1092,9 +1169,10 @@ jobs:
         # Allow failure when GPG_PRIVATE_KEY secret is not set
         continue-on-error: true
         # yamllint disable-line rule:line-length
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # yamllint disable-line rule:line-length
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }} # zizmor: ignore[secrets-outside-env]
           trust_level: ultimate
 
       - name: "Check GPG key availability"
@@ -1238,7 +1316,7 @@ jobs:
         shell: bash
         run: |
           echo "=== Python Signature Detection Test Summary ==="
-          if [ "${{ steps.check-gpg-key.outputs.gpg_available }}" = \
+          if [ "${GPG_AVAILABLE}" = \
             "true" ]; then
             echo "✓ GPG key available - Full verification tests completed"
           else
@@ -1251,6 +1329,8 @@ jobs:
             echo "GPG signatures are detected but not verified" \
               "without the key."
           fi
+        env:
+          GPG_AVAILABLE: ${{ steps.check-gpg-key.outputs.gpg_available }}
 
   test-python-tag-operations:
     name: "Test Python Tag Operations"
@@ -1262,6 +1342,8 @@ jobs:
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Set up Python"
         # yamllint disable-line rule:line-length
