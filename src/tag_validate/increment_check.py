@@ -92,6 +92,7 @@ class RepoContext:
                 return env_api
         if self.host == "github.com":
             return "https://api.github.com"
+        # aislop-ignore-next-line ai-slop/hardcoded-url -- canonical GHES REST API path convention
         return f"https://{self.host}/api/v3"
 
     def __repr__(self) -> str:

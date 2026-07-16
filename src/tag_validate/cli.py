@@ -470,6 +470,7 @@ def verify_gerrit(
         None,
         "--server",
         "-s",
+        # aislop-ignore-next-line ai-slop/hardcoded-url -- example URL in CLI help text
         help="Gerrit server hostname or URL (e.g., 'gerrit.onap.org' or 'https://gerrit.example.com')",
     ),
     github_org: str | None = typer.Option(
