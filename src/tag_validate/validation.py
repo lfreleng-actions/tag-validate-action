@@ -280,7 +280,12 @@ class TagValidator:
 
         Supports common CalVer patterns:
         - YYYY.MM.DD (e.g., 2024.01.15)
-        - YYYY.MM.MICRO (e.g., 2024.01.0)
+        - YYYY.MM.MICRO (e.g., 2024.01.100)
+        - YYYY.MM.DD.MICRO (e.g., 2024.01.15.1)
+
+        In three-component versions the third component is treated as
+        a day when it is 1-31 and as a micro/patch number when it is
+        greater than 31 (0 is rejected as an invalid day).
 
         Args:
             tag: Version string to validate

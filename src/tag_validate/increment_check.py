@@ -24,6 +24,7 @@ import os
 import re
 from itertools import zip_longest
 from pathlib import Path
+from urllib.parse import quote
 
 from dependamerge.git_ops import run_git
 
@@ -37,13 +38,21 @@ GIT_NETWORK_TIMEOUT = 60
 
 # Patterns for extracting owner/repo from git remote URLs
 _REMOTE_URL_PATTERNS = [
-    # ssh: git@github.com:owner/repo.git
+    # scp-style ssh: git@github.com:owner/repo.git
     re.compile(
-        r"^(?:ssh://)?(?:[\w.-]+@)?(?P<host>[\w.-]+)[:/](?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
+        r"^(?:[\w.-]+@)?(?P<host>[\w.-]+):(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
+    ),
+    # ssh url: ssh://git@github.com:2222/owner/repo.git
+    # (the port is SSH transport, not the HTTPS API port, so it is
+    # deliberately excluded from the host)
+    re.compile(
+        r"^ssh://(?:[\w.-]+@)?(?P<host>[\w.-]+)(?::\d+)?/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
     ),
     # https: https://github.com/owner/repo.git
+    # (an explicit port is part of the API base URL, so keep it in the
+    # host)
     re.compile(
-        r"^https?://(?:[\w.-]+@)?(?P<host>[\w.-]+)(?::\d+)?/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
+        r"^https?://(?:[\w.-]+@)?(?P<host>[\w.-]+(?::\d+)?)/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
     ),
 ]
 
@@ -67,14 +76,20 @@ class RepoContext:
     def api_url(self) -> str:
         """Return the REST API base URL for this host.
 
-        Uses GITHUB_API_URL when it matches the runtime environment,
-        https://api.github.com for github.com, and the conventional
-        /api/v3 path for GitHub Enterprise Server hosts.
+        Uses GITHUB_API_URL when this host equals the GITHUB_SERVER_URL
+        host, https://api.github.com for github.com, and the
+        conventional /api/v3 path for GitHub Enterprise Server hosts.
         """
         env_api = os.environ.get("GITHUB_API_URL")
         env_server = os.environ.get("GITHUB_SERVER_URL", "")
-        if env_api and self.host in env_server:
-            return env_api
+        if env_api and env_server:
+            server_host = (
+                re.sub(r"^https?://", "", env_server)
+                .split("/")[0]
+                .split(":")[0]
+            )
+            if server_host.lower() == self.host.split(":")[0].lower():
+                return env_api
         if self.host == "github.com":
             return "https://api.github.com"
         return f"https://{self.host}/api/v3"
@@ -82,6 +97,20 @@ class RepoContext:
     def __repr__(self) -> str:
         """Return string representation."""
         return f"RepoContext({self.host}/{self.owner}/{self.repo})"
+
+
+def _default_host() -> str:
+    """Return the git hosting server hostname for the runtime environment.
+
+    Derives the host from GITHUB_SERVER_URL (supports GitHub Enterprise
+    Server), falling back to github.com.
+
+    Returns:
+        Hostname (e.g. github.com or a GHES hostname)
+    """
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    host = re.sub(r"^https?://", "", server).split("/")[0]
+    return host or "github.com"
 
 
 def detect_repo_context(
@@ -105,7 +134,7 @@ def detect_repo_context(
         RepoContext when a context can be determined, otherwise None
     """
     if owner and repo:
-        return RepoContext("github.com", owner, repo)
+        return RepoContext(_default_host(), owner, repo)
 
     # Try the origin remote URL
     try:
@@ -131,9 +160,7 @@ def detect_repo_context(
     gh_repository = os.environ.get("GITHUB_REPOSITORY", "")
     if "/" in gh_repository:
         gh_owner, _, gh_repo = gh_repository.partition("/")
-        server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
-        host = re.sub(r"^https?://", "", server).split("/")[0] or "github.com"
-        return RepoContext(host, gh_owner, gh_repo)
+        return RepoContext(_default_host(), gh_owner, gh_repo)
 
     return None
 
@@ -255,6 +282,22 @@ def check_increment(
       under a different scheme: the check fails to prevent scheme
       switching from bypassing the gate.
 
+    Parsing is deliberately lenient (prefixes allowed, non-strict
+    SemVer) and independent of the workflow's format policy: the
+    baseline must include every historical version tag even when the
+    current policy would reject its format, otherwise a policy change
+    (e.g. disallowing 'v' prefixes) would empty the baseline and let a
+    stale tag pass as the first version tag. Format policy for the
+    pushed tag is enforced separately by version validation.
+
+    Reporting:
+    - ``latest_tags`` maps each shared scheme to the highest existing
+      tag under that scheme (tags typed 'both' compare under calver and
+      semver independently).
+    - ``latest_tag`` is a scalar convenience: the baseline that blocked
+      the push when the check fails, otherwise the baseline from the
+      scheme with the most comparable tags (ties broken by scheme name).
+
     Args:
         tag_name: The tag being validated
         existing_tags: All tags present in the repository
@@ -330,7 +373,7 @@ def check_increment(
     # The pushed tag must be strictly greater than the highest existing
     # tag under every shared scheme
     incremental = True
-    latest_overall: str | None = None
+    blocking_tag: str | None = None
 
     for scheme, pairs in sorted(comparable.items()):
         if not pairs:
@@ -346,13 +389,13 @@ def check_increment(
             if compare(parsed, latest_parsed) > 0:
                 latest_name, latest_parsed = name, parsed
 
-        if latest_overall is None:
-            latest_overall = latest_name
+        info.latest_tags[scheme] = latest_name
 
         comparison = compare(pushed_parsed, latest_parsed)
         if comparison <= 0:
             incremental = False
-            latest_overall = latest_name
+            if blocking_tag is None:
+                blocking_tag = latest_name
             relation = "equal to" if comparison == 0 else "lower than"
             info.errors.append(
                 f"Tag '{tag_name}' is {relation} existing tag "
@@ -361,7 +404,17 @@ def check_increment(
             )
 
     info.incremental = incremental
-    info.latest_tag = latest_overall
+    if blocking_tag is not None:
+        info.latest_tag = blocking_tag
+    elif info.latest_tags:
+        # Multi-scheme ('both') pushes have one baseline per scheme;
+        # report the one from the scheme with the most comparable tags
+        # (the repository's dominant scheme), ties broken by scheme name
+        dominant = min(
+            info.latest_tags,
+            key=lambda name: (-len(comparable[name]), name),
+        )
+        info.latest_tag = info.latest_tags[dominant]
     return info
 
 
@@ -408,12 +461,14 @@ def _list_tags_via_git(repo_path: Path) -> list[str]:
         Exception: If local tag enumeration fails
     """
     # Best-effort fetch of remote tags (shallow checkouts only contain
-    # the pushed tag); failures are non-fatal
+    # the pushed tag); failures are non-fatal. Deliberately not forced:
+    # existing local tag refs (already inspected by earlier validation
+    # steps) must never be rewritten mid-validation
     try:
         remotes = run_git(["git", "remote"], cwd=repo_path, check=False).stdout.strip()
         if remotes:
             run_git(
-                ["git", "fetch", "--tags", "--force", "--quiet"],
+                ["git", "fetch", "--tags", "--quiet"],
                 cwd=repo_path,
                 check=False,
                 timeout=GIT_NETWORK_TIMEOUT,
@@ -641,8 +696,10 @@ async def check_branch_containment(
     """
     info = BranchCheckInfo(checked=True)
 
-    # Resolve 'true' to the repository default branch
-    if branch.lower() in ("true", "default"):
+    # Resolve the documented 'true' sentinel to the repository
+    # default branch; any other value is treated as a literal
+    # branch name (including a branch actually named 'default')
+    if branch.lower() == "true":
         resolved = await resolve_default_branch(repo_path, context, token)
         if not resolved:
             info.contains = None
@@ -662,9 +719,12 @@ async def check_branch_containment(
 
             async with GitHubKeysClient(token=token, api_url=context.api_url) as client:
                 github = client._ensure_client()
+                # Branch names can contain slashes (e.g. release/2.x)
+                # and must be URL-encoded in the compare path
+                encoded_branch = quote(branch, safe="")
                 data = await github.get(
                     f"/repos/{context.owner}/{context.repo}/compare/"
-                    f"{branch}...{commit_sha}"
+                    f"{encoded_branch}...{commit_sha}"
                 )
                 if isinstance(data, dict) and "status" in data:
                     status = data["status"]

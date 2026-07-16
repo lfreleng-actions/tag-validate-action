@@ -208,6 +208,44 @@ class TestCheckIncrement:
         info = check_increment("v2.0.0", ["v1.0.0", "not-a-version", "v1.5.0"])
         assert info.incremental is True
         assert info.latest_tag == "v1.5.0"
+        assert info.latest_tags == {"semver": "v1.5.0"}
+
+    def test_both_scheme_tracks_per_scheme_baselines(self):
+        """A 'both'-typed push records a baseline for each scheme."""
+        # 2025.01.15 is CalVer-only (leading zero); 2025.13.1 is
+        # SemVer-only (month 13 is invalid CalVer)
+        info = check_increment("2026.1.1", ["2025.01.15", "2025.13.1"])
+        assert info.scheme == "calver+semver"
+        assert info.incremental is True
+        assert info.latest_tags == {
+            "calver": "2025.01.15",
+            "semver": "2025.13.1",
+        }
+        # Equal candidate counts: tie broken by scheme name
+        assert info.latest_tag == "2025.01.15"
+
+    def test_both_scheme_dominant_baseline_on_success(self):
+        """On success, latest_tag comes from the dominant scheme."""
+        info = check_increment("2026.1.1", ["2025.01.15", "2025.13.1", "2025.14.1"])
+        assert info.incremental is True
+        assert info.latest_tags == {
+            "calver": "2025.01.15",
+            "semver": "2025.14.1",
+        }
+        # SemVer has the most comparable tags, so its baseline wins
+        assert info.latest_tag == "2025.14.1"
+
+    def test_both_scheme_failure_reports_blocking_tag(self):
+        """On failure, latest_tag names the tag that blocked the push."""
+        # 2025.6.1 exceeds the CalVer baseline but not the SemVer one
+        info = check_increment("2025.6.1", ["2025.01.15", "2025.13.1"])
+        assert info.incremental is False
+        assert info.latest_tags == {
+            "calver": "2025.01.15",
+            "semver": "2025.13.1",
+        }
+        assert info.latest_tag == "2025.13.1"
+        assert any("2025.13.1" in e for e in info.errors)
 
     def test_prerelease_of_existing_release_fails(self):
         """A pre-release below the current release is rejected."""
@@ -235,6 +273,15 @@ class TestDetectRepoContext:
         assert context.owner == "lfreleng-actions"
         assert context.repo == "test"
 
+    def test_explicit_owner_repo_ghes_host(self, tmp_path, monkeypatch):
+        """Explicit owner/repo derives the host from GITHUB_SERVER_URL."""
+        monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example.com")
+        monkeypatch.delenv("GITHUB_API_URL", raising=False)
+        context = detect_repo_context(tmp_path, "org", "repo")
+        assert context is not None
+        assert context.host == "github.example.com"
+        assert context.api_url == "https://github.example.com/api/v3"
+
     def test_origin_remote(self, git_repo, no_actions_env):
         """The origin remote URL is parsed for owner/repo."""
         _git(
@@ -250,6 +297,22 @@ class TestDetectRepoContext:
         assert context.owner == "example-org"
         assert context.repo == "example-repo"
 
+    def test_https_remote_with_port(self, git_repo, no_actions_env):
+        """HTTPS remote URLs keep an explicit port in the host."""
+        _git(
+            git_repo,
+            "remote",
+            "add",
+            "origin",
+            "https://github.example.com:8443/example-org/example-repo.git",
+        )
+        context = detect_repo_context(git_repo)
+        assert context is not None
+        assert context.host == "github.example.com:8443"
+        assert context.owner == "example-org"
+        assert context.repo == "example-repo"
+        assert context.api_url == "https://github.example.com:8443/api/v3"
+
     def test_ssh_remote(self, git_repo, no_actions_env):
         """SSH-style remote URLs are parsed for owner/repo."""
         _git(
@@ -261,6 +324,36 @@ class TestDetectRepoContext:
         )
         context = detect_repo_context(git_repo)
         assert context is not None
+        assert context.owner == "example-org"
+        assert context.repo == "example-repo"
+
+    def test_ssh_url_remote(self, git_repo, no_actions_env):
+        """ssh:// remote URLs are parsed for owner/repo."""
+        _git(
+            git_repo,
+            "remote",
+            "add",
+            "origin",
+            "ssh://git@github.example.com/example-org/example-repo.git",
+        )
+        context = detect_repo_context(git_repo)
+        assert context is not None
+        assert context.host == "github.example.com"
+        assert context.owner == "example-org"
+        assert context.repo == "example-repo"
+
+    def test_ssh_url_remote_with_port(self, git_repo, no_actions_env):
+        """ssh:// remote URLs with a port parse host and owner/repo."""
+        _git(
+            git_repo,
+            "remote",
+            "add",
+            "origin",
+            "ssh://git@github.example.com:2222/example-org/example-repo.git",
+        )
+        context = detect_repo_context(git_repo)
+        assert context is not None
+        assert context.host == "github.example.com"
         assert context.owner == "example-org"
         assert context.repo == "example-repo"
 
@@ -286,6 +379,24 @@ class TestDetectRepoContext:
         """GHES hosts map to the conventional /api/v3 path."""
         context = RepoContext("github.example.com", "org", "repo")
         assert context.api_url == "https://github.example.com/api/v3"
+
+    def test_api_url_env_applies_to_matching_host(self, no_actions_env, monkeypatch):
+        """GITHUB_API_URL applies when the host matches the server URL."""
+        monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example.com")
+        monkeypatch.setenv("GITHUB_API_URL", "https://github.example.com/custom/api")
+        context = RepoContext("github.example.com", "org", "repo")
+        assert context.api_url == "https://github.example.com/custom/api"
+
+    def test_api_url_env_ignored_for_other_hosts(self, no_actions_env, monkeypatch):
+        """GITHUB_API_URL is ignored for hosts not matching the server.
+
+        A substring match (e.g. hub.com inside https://github.com) must
+        not select the environment API URL.
+        """
+        monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+        monkeypatch.setenv("GITHUB_API_URL", "https://api.github.com")
+        context = RepoContext("hub.com", "org", "repo")
+        assert context.api_url == "https://hub.com/api/v3"
 
 
 class _FakeGitHub:
@@ -347,6 +458,7 @@ def fake_github(monkeypatch):
 class TestListRepositoryTags:
     """Tests for repository tag enumeration."""
 
+    @pytest.mark.asyncio
     async def test_git_only(self, git_repo, no_actions_env):
         """Tags are enumerated from local git without a context."""
         _git(git_repo, "tag", "v1.0.0")
@@ -355,6 +467,7 @@ class TestListRepositoryTags:
         assert tags == ["v1.0.0", "v2.0.0"]
         assert source == "git"
 
+    @pytest.mark.asyncio
     async def test_api_and_git_union(self, git_repo, no_actions_env, fake_github):
         """API and git tag lists are merged."""
         fake_github(pages=[[{"name": "v1.0.0"}, {"name": "v3.0.0"}]])
@@ -364,6 +477,7 @@ class TestListRepositoryTags:
         assert tags == ["v1.0.0", "v2.0.0", "v3.0.0"]
         assert source == "api+git"
 
+    @pytest.mark.asyncio
     async def test_all_sources_fail(self, tmp_path, no_actions_env):
         """Failure of every source raises RuntimeError."""
         not_a_repo = tmp_path / "empty"
@@ -375,6 +489,7 @@ class TestListRepositoryTags:
 class TestResolveDefaultBranch:
     """Tests for default branch resolution."""
 
+    @pytest.mark.asyncio
     async def test_via_api(self, git_repo, no_actions_env, fake_github):
         """The API repository object provides the default branch."""
         fake_github(responses={"/repos/org/repo": {"default_branch": "develop"}})
@@ -382,6 +497,7 @@ class TestResolveDefaultBranch:
         branch = await resolve_default_branch(git_repo, context)
         assert branch == "develop"
 
+    @pytest.mark.asyncio
     async def test_undetermined(self, git_repo, no_actions_env):
         """No API context and no origin yields None."""
         branch = await resolve_default_branch(git_repo)
@@ -391,6 +507,7 @@ class TestResolveDefaultBranch:
 class TestCheckBranchContainment:
     """Tests for branch containment checks."""
 
+    @pytest.mark.asyncio
     async def test_commit_on_branch(self, git_repo, no_actions_env):
         """A commit on the branch passes the check."""
         sha = _git(git_repo, "rev-parse", "HEAD")
@@ -401,6 +518,7 @@ class TestCheckBranchContainment:
         assert info.branch == "main"
         assert info.method == "git"
 
+    @pytest.mark.asyncio
     async def test_commit_not_on_branch(self, git_repo, no_actions_env):
         """A commit on an unmerged side branch fails the check."""
         _git(git_repo, "checkout", "-b", "side")
@@ -414,6 +532,7 @@ class TestCheckBranchContainment:
         assert info.contains is False
         assert any("not reachable" in e for e in info.errors)
 
+    @pytest.mark.asyncio
     async def test_missing_branch_indeterminate(self, git_repo, no_actions_env):
         """An unknown branch yields an indeterminate (failing) result."""
         sha = _git(git_repo, "rev-parse", "HEAD")
@@ -421,6 +540,7 @@ class TestCheckBranchContainment:
         assert info.contains is None
         assert info.errors
 
+    @pytest.mark.asyncio
     async def test_autodetect_without_source_fails(self, git_repo, no_actions_env):
         """Auto-detect fails closed when no default branch is found."""
         sha = _git(git_repo, "rev-parse", "HEAD")
@@ -428,6 +548,7 @@ class TestCheckBranchContainment:
         assert info.contains is None
         assert any("auto-detect" in e for e in info.errors)
 
+    @pytest.mark.asyncio
     async def test_api_contained(self, git_repo, no_actions_env, fake_github):
         """The compare API reports containment for behind/identical."""
         sha = "a" * 40
@@ -439,6 +560,7 @@ class TestCheckBranchContainment:
         assert info.contains is True
         assert info.method == "api"
 
+    @pytest.mark.asyncio
     async def test_api_not_contained(self, git_repo, no_actions_env, fake_github):
         """The compare API reports non-containment for ahead/diverged."""
         sha = "b" * 40
@@ -450,10 +572,31 @@ class TestCheckBranchContainment:
         assert info.contains is False
         assert any("not reachable" in e for e in info.errors)
 
+    @pytest.mark.asyncio
+    async def test_api_branch_name_url_encoded(
+        self, git_repo, no_actions_env, fake_github
+    ):
+        """Branch names with slashes are URL-encoded in the compare path."""
+        sha = "c" * 40
+        fake_github(
+            responses={
+                f"/repos/org/repo/compare/release%2F2.x...{sha}": {
+                    "status": "identical"
+                }
+            }
+        )
+        context = RepoContext("github.com", "org", "repo")
+        info = await check_branch_containment(
+            "v2.1.0", sha, "release/2.x", git_repo, context
+        )
+        assert info.contains is True
+        assert info.method == "api"
+
 
 class TestWorkflowIntegration:
     """Workflow-level tests for the release gating checks."""
 
+    @pytest.mark.asyncio
     async def test_enforce_increment_blocks_lower_tag(self, git_repo, no_actions_env):
         """Validating a lower-value tag fails when enforcement is on."""
         _git(git_repo, "tag", "-a", "v2.0.0", "-m", "Release v2.0.0")
@@ -471,6 +614,7 @@ class TestWorkflowIntegration:
         assert result.increment_check.incremental is False
         assert result.increment_check.latest_tag == "v2.0.0"
 
+    @pytest.mark.asyncio
     async def test_enforce_increment_allows_higher_tag(self, git_repo, no_actions_env):
         """Validating a higher-value tag passes the increment check."""
         _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
@@ -487,6 +631,7 @@ class TestWorkflowIntegration:
         assert result.increment_check.incremental is True
         assert result.increment_check.latest_tag == "v1.0.0"
 
+    @pytest.mark.asyncio
     async def test_require_branch_blocks_off_branch_tag(self, git_repo, no_actions_env):
         """Validating a tag off the required branch fails."""
         _git(git_repo, "checkout", "-b", "side")
@@ -504,6 +649,7 @@ class TestWorkflowIntegration:
         assert result.branch_check is not None
         assert result.branch_check.contains is False
 
+    @pytest.mark.asyncio
     async def test_require_branch_allows_on_branch_tag(self, git_repo, no_actions_env):
         """Validating a tag on the required branch passes the check."""
         _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
@@ -515,3 +661,26 @@ class TestWorkflowIntegration:
         assert result.branch_check is not None
         assert result.branch_check.contains is True
         assert result.branch_check.branch == "main"
+
+    @pytest.mark.asyncio
+    async def test_require_branch_fails_closed_on_error(
+        self, git_repo, no_actions_env, monkeypatch
+    ):
+        """An unexpected containment error fails closed, not aborts."""
+        _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("simulated network failure")
+
+        monkeypatch.setattr(
+            "tag_validate.increment_check.check_branch_containment", boom
+        )
+        config = ValidationConfig(require_branch="main")
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.is_valid is False
+        assert result.branch_check is not None
+        assert result.branch_check.checked is True
+        assert result.branch_check.contains is None
+        assert any("simulated network failure" in e for e in result.branch_check.errors)

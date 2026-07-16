@@ -396,6 +396,7 @@ This prevents releases from unreviewed or orphaned commits.
 
 - A branch name (e.g. `main`, `release/2.x`)
 - `true` to auto-detect the repository default branch
+- Empty, `false`, `no`, or `0` to disable the check
 
 **Behavior:**
 

@@ -349,6 +349,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -384,6 +386,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -420,6 +424,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -463,6 +469,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -562,6 +570,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -686,3 +696,59 @@ class TestGerritVerification:
         normalized_help = " ".join(cleaned.split())
         assert "verify signing key" in normalized_help.lower()
         assert "registered on gerrit" in normalized_help.lower()
+
+
+class TestRequireBranchNormalization:
+    """Test --require-branch value normalization."""
+
+    @staticmethod
+    def _mock_result():
+        """Build a passing validation result mock."""
+        mock_result = Mock()
+        mock_result.is_valid = True
+        mock_result.tag_name = "v1.0.0"
+        mock_result.config = Mock()
+        mock_result.errors = []
+        mock_result.warnings = []
+        mock_result.info = []
+        mock_result.key_verifications = []
+        mock_result.signature_info = Mock()
+        mock_result.signature_info.type = "unsigned"
+        mock_result.version_info = Mock()
+        mock_result.version_info.version_type = "semver"
+        mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
+        return mock_result
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_disable_value_with_whitespace(self, mock_workflow_class):
+        """A padded disable value (' false ') disables branch gating."""
+        mock_workflow = Mock()
+        mock_workflow_class.return_value = mock_workflow
+        mock_workflow.validate_tag_location.return_value = async_return(
+            self._mock_result()
+        )
+        mock_workflow.create_validation_summary.return_value = "PASSED"
+
+        result = runner.invoke(app, ["verify", "v1.0.0", "--require-branch", " false "])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.require_branch is None
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_branch_name_with_whitespace(self, mock_workflow_class):
+        """A padded branch name (' main ') is stripped, not dropped."""
+        mock_workflow = Mock()
+        mock_workflow_class.return_value = mock_workflow
+        mock_workflow.validate_tag_location.return_value = async_return(
+            self._mock_result()
+        )
+        mock_workflow.create_validation_summary.return_value = "PASSED"
+
+        result = runner.invoke(app, ["verify", "v1.0.0", "--require-branch", " main "])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.require_branch == "main"

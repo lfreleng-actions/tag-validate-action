@@ -101,9 +101,9 @@ inputs:
     description: >-
       Require the tag to point to a commit reachable from the given
       branch. Provide a branch name (e.g. 'main'), or 'true' to
-      auto-detect the repository default branch. Requires a repository
-      context (tag_location or tag push event); not supported with
-      tag_string.
+      auto-detect the repository default branch. Empty, 'false', 'no',
+      or '0' disable the check. Requires a repository context
+      (tag_location or tag push event); not supported with tag_string.
     required: false
     default: ''
   permit_missing:
@@ -285,8 +285,17 @@ runs:
         REQUIRE_GERRIT=$(printf '%s\n' "${INPUTS_REQUIRE_GERRIT}" | tr '[:upper:]' '[:lower:]')
         REQUIRE_OWNER="${INPUTS_REQUIRE_OWNER}"
         REJECT_DEVELOPMENT=$(printf '%s\n' "${INPUTS_REJECT_DEVELOPMENT}" | tr '[:upper:]' '[:lower:]')
-        ENFORCE_INCREMENT=$(printf '%s\n' "${INPUTS_ENFORCE_INCREMENT}" | tr '[:upper:]' '[:lower:]')
-        REQUIRE_BRANCH="${INPUTS_REQUIRE_BRANCH}"
+        ENFORCE_INCREMENT=$(printf '%s\n' "${INPUTS_ENFORCE_INCREMENT}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        # Trim surrounding whitespace (workflow inputs may carry stray
+        # spaces); git branch names never contain whitespace
+        REQUIRE_BRANCH=$(printf '%s\n' "${INPUTS_REQUIRE_BRANCH}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # The CLI treats false/no/0 as "branch gating disabled"; normalize
+        # those values to empty (preserving branch name case) so the
+        # tag_string guard and --require-branch flag match CLI semantics
+        REQUIRE_BRANCH_LOWER=$(printf '%s\n' "${REQUIRE_BRANCH}" | tr '[:upper:]' '[:lower:]')
+        case "${REQUIRE_BRANCH_LOWER}" in
+          false|no|0) REQUIRE_BRANCH="" ;;
+        esac
         PERMIT_MISSING=$(printf '%s\n' "${INPUTS_PERMIT_MISSING}" | tr '[:upper:]' '[:lower:]')
         DEBUG=$(printf '%s\n' "${INPUTS_DEBUG}" | tr '[:upper:]' '[:lower:]')
         USE_LOCAL_ACTION=$(printf '%s\n' "${INPUTS_USE_LOCAL_ACTION}" | tr '[:upper:]' '[:lower:]')
@@ -593,9 +602,11 @@ runs:
                 elif tag_name and tag_name[0:1] in ("v", "V"):
                     has_prefix = "true"
 
-                # Increment check results (empty when check not performed)
-                if data.get("incremental") is not None:
-                    incremental = str(data.get("incremental")).lower()
+                # Increment check results: the key is present when the
+                # check was performed; null means indeterminate, which
+                # fails closed and is reported as false
+                if "incremental" in data:
+                    incremental = "true" if data.get("incremental") else "false"
                 latest_tag = data.get("latest_tag") or ""
             except Exception as e:
                 print(f"Warning: Could not parse JSON output, using defaults: {e}", file=sys.stderr)

@@ -145,14 +145,20 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
 
         # Increment enforcement result
         if result.increment_check and result.increment_check.checked:
-            incremental = result.increment_check.incremental
+            # Indeterminate (None) fails closed, so report it as false
+            incremental = bool(result.increment_check.incremental)
             markdown_lines.append(f"| **Incremental** | `{str(incremental).lower()}` |")
-            if result.increment_check.latest_tag:
+            if len(result.increment_check.latest_tags) > 1:
+                # Multi-scheme push: report each scheme's baseline
+                for scheme, tag in sorted(result.increment_check.latest_tags.items()):
+                    markdown_lines.append(f"| **Latest Existing Tag ({scheme})** | `{tag}` |")
+            elif result.increment_check.latest_tag:
                 markdown_lines.append(f"| **Latest Existing Tag** | `{result.increment_check.latest_tag}` |")
 
         # Branch containment result
         if result.branch_check and result.branch_check.checked:
-            contains = result.branch_check.contains
+            # Indeterminate (None) fails closed, so report it as false
+            contains = bool(result.branch_check.contains)
             markdown_lines.append(f"| **On Required Branch** | `{str(contains).lower()}` |")
             if result.branch_check.branch:
                 markdown_lines.append(f"| **Required Branch** | `{result.branch_check.branch}` |")

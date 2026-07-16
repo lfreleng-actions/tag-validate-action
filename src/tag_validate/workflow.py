@@ -674,6 +674,7 @@ class ValidationWorkflow:
             check_branch_containment,
             detect_repo_context,
         )
+        from .models import BranchCheckInfo
 
         require_branch = self.config.require_branch or ""
         logger.debug(
@@ -684,14 +685,29 @@ class ValidationWorkflow:
         owner, repo = self._current_repo_context or (None, None)
         context = detect_repo_context(Path(self.repo_path), owner, repo)
 
-        check = await check_branch_containment(
-            tag_name=tag_name,
-            commit_sha=tag_info.commit_sha,
-            branch=require_branch,
-            repo_path=Path(self.repo_path),
-            context=context,
-            token=github_token,
-        )
+        try:
+            check = await check_branch_containment(
+                tag_name=tag_name,
+                commit_sha=tag_info.commit_sha,
+                branch=require_branch,
+                repo_path=Path(self.repo_path),
+                context=context,
+                token=github_token,
+            )
+        except Exception as e:
+            # Fail closed: an unexpected error (network/IO) must block
+            # the release gate rather than abort validation entirely
+            result.branch_check = BranchCheckInfo(
+                checked=True,
+                branch=require_branch or None,
+                contains=None,
+                errors=[f"Branch containment check failed: {e}"],
+            )
+            result.add_error(
+                f"Branch containment check failed for tag "
+                f"'{tag_name}': {e}"
+            )
+            return False
         result.branch_check = check
 
         if check.contains:
@@ -1480,7 +1496,11 @@ class ValidationWorkflow:
             ic = result.increment_check
             status_icon = "✅" if ic.incremental else "❌"
             lines.append(f"Version Increment {status_icon}")
-            if ic.latest_tag:
+            if len(ic.latest_tags) > 1:
+                # Multi-scheme push: report each scheme's baseline
+                for scheme, tag in sorted(ic.latest_tags.items()):
+                    lines.append(f"  Latest Existing Tag ({scheme}): {tag}")
+            elif ic.latest_tag:
                 lines.append(f"  Latest Existing Tag: {ic.latest_tag}")
             elif ic.incremental:
                 lines.append("  First version tag in repository")

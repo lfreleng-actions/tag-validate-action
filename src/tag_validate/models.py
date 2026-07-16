@@ -181,7 +181,15 @@ class IncrementCheckInfo(BaseModel):
     )
     latest_tag: str | None = Field(
         None,
-        description="Highest existing comparable tag used as the baseline",
+        description=(
+            "Baseline tag for reporting: the tag that blocked the push "
+            "when the check fails, otherwise the highest existing tag "
+            "under the scheme with the most comparable tags"
+        ),
+    )
+    latest_tags: dict[str, str] = Field(
+        default_factory=dict,
+        description="Highest existing comparable tag per versioning scheme",
     )
     candidate_count: int = Field(
         0, description="Number of existing comparable tags considered"

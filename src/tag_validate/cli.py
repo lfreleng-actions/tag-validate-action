@@ -1983,6 +1983,10 @@ def verify(
                     config_require_gerrit = True
                     gerrit_server = require_gerrit
 
+            # Whitespace-tolerant normalization: workflow inputs may
+            # carry stray spaces around a branch name or sentinel value
+            require_branch_value = (require_branch or "").strip()
+
             # Build configuration
             config = ValidationConfig(
                 require_semver=("semver" in require_type_list or "both" in require_type_list) if require_type_list else False,
@@ -1997,7 +2001,7 @@ def verify(
                 skip_version_validation=skip_version_validation,
                 allow_prefix=True,  # Default to allowing version prefixes
                 enforce_increment=enforce_increment,
-                require_branch=require_branch if require_branch and require_branch.lower() not in ("false", "no", "0", "") else None,
+                require_branch=require_branch_value if require_branch_value and require_branch_value.lower() not in ("false", "no", "0") else None,
                 config_source="CLI",  # Mark as CLI-originated config
             )
 
@@ -2183,6 +2187,7 @@ def verify(
                 if result.increment_check and result.increment_check.checked:
                     output["incremental"] = result.increment_check.incremental
                     output["latest_tag"] = result.increment_check.latest_tag
+                    output["latest_tags"] = result.increment_check.latest_tags
                 if result.branch_check and result.branch_check.checked:
                     output["branch"] = result.branch_check.branch
                     output["branch_valid"] = result.branch_check.contains
@@ -2257,6 +2262,7 @@ def verify(
                 if result.increment_check and result.increment_check.checked:
                     output["incremental"] = result.increment_check.incremental
                     output["latest_tag"] = result.increment_check.latest_tag
+                    output["latest_tags"] = result.increment_check.latest_tags
                 if result.branch_check and result.branch_check.checked:
                     output["branch"] = result.branch_check.branch
                     output["branch_valid"] = result.branch_check.contains
