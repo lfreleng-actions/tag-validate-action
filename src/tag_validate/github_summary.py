@@ -143,6 +143,20 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
                 if verification.user_name:
                     markdown_lines.append(f"| **{service_name} Name** | `{verification.user_name}` |")
 
+        # Increment enforcement result
+        if result.increment_check and result.increment_check.checked:
+            incremental = result.increment_check.incremental
+            markdown_lines.append(f"| **Incremental** | `{str(incremental).lower()}` |")
+            if result.increment_check.latest_tag:
+                markdown_lines.append(f"| **Latest Existing Tag** | `{result.increment_check.latest_tag}` |")
+
+        # Branch containment result
+        if result.branch_check and result.branch_check.checked:
+            contains = result.branch_check.contains
+            markdown_lines.append(f"| **On Required Branch** | `{str(contains).lower()}` |")
+            if result.branch_check.branch:
+                markdown_lines.append(f"| **Required Branch** | `{result.branch_check.branch}` |")
+
         markdown_lines.append("")
 
         # Write to summary file

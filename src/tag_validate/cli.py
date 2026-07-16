@@ -43,6 +43,8 @@ EXIT_INVALID_INPUT = 3
 EXIT_UNEXPECTED_ERROR = 4
 EXIT_MISSING_CREDENTIALS = 5  # Required credentials not provided (Gerrit)
 EXIT_AUTH_FAILED = 6  # Authentication failed (invalid credentials)
+EXIT_NOT_INCREMENTAL = 7  # Tag does not increment the repository version
+EXIT_BRANCH_CHECK_FAILED = 8  # Tag commit not reachable from required branch
 
 
 class CustomTyper(typer.Typer):
@@ -1721,6 +1723,24 @@ def verify(
         "--reject-development",
         help="Reject development versions (alpha, beta, rc, etc.)",
     ),
+    enforce_increment: bool = typer.Option(
+        False,
+        "--enforce-increment",
+        help=(
+            "Require the tag to be strictly greater than the highest "
+            "existing comparable tag in the repository (prevents "
+            "re-releasing older versions)"
+        ),
+    ),
+    require_branch: str | None = typer.Option(
+        None,
+        "--require-branch",
+        help=(
+            "Require the tag commit to be reachable from this branch. "
+            "Pass a branch name, or 'true' to auto-detect the "
+            "repository default branch."
+        ),
+    ),
     skip_version_validation: bool = typer.Option(
         False,
         "--skip-version-validation",
@@ -1976,6 +1996,8 @@ def verify(
                 reject_development=reject_development if not skip_version_validation else False,
                 skip_version_validation=skip_version_validation,
                 allow_prefix=True,  # Default to allowing version prefixes
+                enforce_increment=enforce_increment,
+                require_branch=require_branch if require_branch and require_branch.lower() not in ("false", "no", "0", "") else None,
                 config_source="CLI",  # Mark as CLI-originated config
             )
 
@@ -2157,6 +2179,14 @@ def verify(
                         }
                         output["key_verifications"].append(verification)
 
+                # Add increment/branch gating results if checks performed
+                if result.increment_check and result.increment_check.checked:
+                    output["incremental"] = result.increment_check.incremental
+                    output["latest_tag"] = result.increment_check.latest_tag
+                if result.branch_check and result.branch_check.checked:
+                    output["branch"] = result.branch_check.branch
+                    output["branch_valid"] = result.branch_check.contains
+
                 console.print_json(data=output)
             else:
                 _display_validation_result(result, workflow)
@@ -2223,6 +2253,14 @@ def verify(
                         }
                         output["key_verifications"].append(verification)
 
+                # Add increment/branch gating results if checks performed
+                if result.increment_check and result.increment_check.checked:
+                    output["incremental"] = result.increment_check.incremental
+                    output["latest_tag"] = result.increment_check.latest_tag
+                if result.branch_check and result.branch_check.checked:
+                    output["branch"] = result.branch_check.branch
+                    output["branch_valid"] = result.branch_check.contains
+
                 # Write to file
                 try:
                     json_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2239,6 +2277,20 @@ def verify(
             if result.is_valid:
                 raise typer.Exit(EXIT_SUCCESS)
             else:
+                # Structural failures first (not string matching)
+                if (
+                    result.increment_check
+                    and result.increment_check.checked
+                    and result.increment_check.incremental is not True
+                ):
+                    raise typer.Exit(EXIT_NOT_INCREMENTAL)
+                if (
+                    result.branch_check
+                    and result.branch_check.checked
+                    and result.branch_check.contains is not True
+                ):
+                    raise typer.Exit(EXIT_BRANCH_CHECK_FAILED)
+
                 # Check for specific error types and return appropriate exit codes
                 error_messages = " ".join(result.errors).lower()
 

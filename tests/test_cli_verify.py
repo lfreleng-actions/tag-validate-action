@@ -518,6 +518,8 @@ class TestGerritVerification:
         mock_result.version_info = Mock()
         mock_result.version_info.version_type = "semver"
         mock_result.version_info.is_development = False
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -631,6 +633,8 @@ class TestGerritVerification:
         mock_result.version_info.patch = 0
         mock_result.version_info.prerelease = None
         mock_result.version_info.build_metadata = None
+        mock_result.increment_check = None
+        mock_result.branch_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
 

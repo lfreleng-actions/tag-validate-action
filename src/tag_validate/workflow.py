@@ -114,6 +114,9 @@ class ValidationWorkflow:
         self.detector: SignatureDetector = SignatureDetector(self.repo_path)
         self.operations: TagOperations = TagOperations()
         self._current_github_org: str | None = None
+        # Remote repository context (owner, repo) when validating a
+        # remote tag location; used by increment/branch checks
+        self._current_repo_context: tuple[str, str] | None = None
 
         logger.debug(f"Initialized ValidationWorkflow with config: {config}")
 
@@ -226,6 +229,24 @@ class ValidationWorkflow:
         else:
             # Skip version validation entirely (legacy flag support)
             result.add_info("Version validation skipped (--skip-version-validation)")
+
+        # Step 2b: Enforce version increment (if requested)
+        if self.config.enforce_increment:
+            increment_ok = await self._check_increment(
+                tag_name, result, github_token
+            )
+            if not increment_ok:
+                result.is_valid = False
+                return result
+
+        # Step 2c: Require tag commit on a specific branch (if requested)
+        if self.config.require_branch:
+            branch_ok = await self._check_branch(
+                tag_name, tag_info, result, github_token
+            )
+            if not branch_ok:
+                result.is_valid = False
+                return result
 
         # Step 3: Detect and validate signature
         try:
@@ -555,6 +576,138 @@ class ValidationWorkflow:
             return False
 
         return True
+
+    async def _check_increment(
+        self,
+        tag_name: str,
+        result: ValidationResult,
+        github_token: str | None = None,
+    ) -> bool:
+        """Check that the tag increments the repository version.
+
+        Enumerates repository tags (GitHub API and/or local git) and
+        requires the tag to compare strictly greater than the highest
+        existing comparable tag. Fails closed when tags cannot be
+        enumerated or ordering cannot be established.
+
+        Args:
+            tag_name: Name of the tag being validated
+            result: ValidationResult to update
+            github_token: GitHub API token (optional)
+
+        Returns:
+            bool: True if the tag is incremental
+        """
+        from .increment_check import (
+            check_increment,
+            detect_repo_context,
+            list_repository_tags,
+        )
+        from .models import IncrementCheckInfo
+
+        logger.debug(f"Checking version increment for tag: {tag_name}")
+
+        owner, repo = self._current_repo_context or (None, None)
+        context = detect_repo_context(Path(self.repo_path), owner, repo)
+
+        try:
+            tags, tag_source = await list_repository_tags(
+                Path(self.repo_path), context, github_token
+            )
+        except Exception as e:
+            result.increment_check = IncrementCheckInfo(
+                checked=True,
+                incremental=None,
+                errors=[f"Failed to enumerate repository tags: {e}"],
+            )
+            result.add_error(
+                f"Increment enforcement failed: could not enumerate "
+                f"repository tags: {e}"
+            )
+            return False
+
+        check = check_increment(
+            tag_name, tags, validator=self.validator, tag_source=tag_source
+        )
+        result.increment_check = check
+
+        if check.incremental:
+            if check.latest_tag:
+                result.add_info(
+                    f"Tag increments repository version "
+                    f"(previous highest: {check.latest_tag})"
+                )
+            else:
+                result.add_info(
+                    "Tag is the first version tag in the repository"
+                )
+            return True
+
+        for error in check.errors:
+            result.add_error(error)
+        if not check.errors:
+            result.add_error(
+                f"Tag '{tag_name}' does not increment the repository "
+                f"version (latest: {check.latest_tag})"
+            )
+        return False
+
+    async def _check_branch(
+        self,
+        tag_name: str,
+        tag_info: TagInfo,
+        result: ValidationResult,
+        github_token: str | None = None,
+    ) -> bool:
+        """Check that the tag commit is reachable from the required branch.
+
+        Args:
+            tag_name: Name of the tag being validated
+            tag_info: Tag information (provides the commit SHA)
+            result: ValidationResult to update
+            github_token: GitHub API token (optional)
+
+        Returns:
+            bool: True if the tag commit is on the required branch
+        """
+        from .increment_check import (
+            check_branch_containment,
+            detect_repo_context,
+        )
+
+        require_branch = self.config.require_branch or ""
+        logger.debug(
+            f"Checking branch containment for tag {tag_name} "
+            f"(branch: {require_branch})"
+        )
+
+        owner, repo = self._current_repo_context or (None, None)
+        context = detect_repo_context(Path(self.repo_path), owner, repo)
+
+        check = await check_branch_containment(
+            tag_name=tag_name,
+            commit_sha=tag_info.commit_sha,
+            branch=require_branch,
+            repo_path=Path(self.repo_path),
+            context=context,
+            token=github_token,
+        )
+        result.branch_check = check
+
+        if check.contains:
+            result.add_info(
+                f"Tag commit is reachable from branch '{check.branch}'"
+            )
+            return True
+
+        for error in check.errors:
+            result.add_error(error)
+        if not check.errors:
+            result.add_error(
+                f"Tag '{tag_name}' commit is not reachable from "
+                f"branch '{check.branch}'"
+            )
+        return False
 
     async def _detect_signature(self, tag_name: str, tag_info: TagInfo) -> SignatureInfo:
         """Detect signature on a tag.
@@ -1059,6 +1212,8 @@ class ValidationWorkflow:
 
                     # Store GitHub org for Gerrit auto-discovery
                     self._current_github_org = owner
+                    # Store repo context for increment/branch checks
+                    self._current_repo_context = (owner, repo)
 
                     # Validate the tag
                     result = await self.validate_tag(tag, github_user, github_token, require_owners)
@@ -1075,6 +1230,7 @@ class ValidationWorkflow:
                     logger.debug(f"Cleaned up temporary directory: {temp_dir}")
                     # Clear stored org
                     self._current_github_org = None
+                    self._current_repo_context = None
 
             except Exception as e:
                 logger.error(f"Failed to validate remote tag: {e}")
@@ -1186,6 +1342,9 @@ class ValidationWorkflow:
                         self.repo_path = temp_dir
                         self.detector = SignatureDetector(temp_dir)
 
+                        # Store repo context for increment/branch checks
+                        self._current_repo_context = (owner, repo)
+
                         # Validate the tag
                         result = await self.validate_tag(tag, github_user, github_token, require_owners)
 
@@ -1199,6 +1358,7 @@ class ValidationWorkflow:
                         # Clean up temporary directory
                         secure_rmtree(temp_dir)
                         logger.debug(f"Cleaned up temporary directory: {temp_dir}")
+                        self._current_repo_context = None
 
                 except Exception as e:
                     logger.error(f"Failed to validate as remote tag: {e}")
@@ -1313,6 +1473,30 @@ class ValidationWorkflow:
                     lines.append(f"  Signer: {s.signer_email}")
                 if s.key_id:
                     lines.append(f"  Key ID: {s.key_id}")
+            lines.append("")
+
+        # Increment enforcement
+        if result.increment_check and result.increment_check.checked:
+            ic = result.increment_check
+            status_icon = "✅" if ic.incremental else "❌"
+            lines.append(f"Version Increment {status_icon}")
+            if ic.latest_tag:
+                lines.append(f"  Latest Existing Tag: {ic.latest_tag}")
+            elif ic.incremental:
+                lines.append("  First version tag in repository")
+            if ic.scheme:
+                lines.append(f"  Comparison Scheme: {ic.scheme}")
+            lines.append("")
+
+        # Branch containment
+        if result.branch_check and result.branch_check.checked:
+            bc = result.branch_check
+            status_icon = "✅" if bc.contains else "❌"
+            lines.append(f"Branch Containment {status_icon}")
+            if bc.branch:
+                lines.append(f"  Branch: {bc.branch}")
+            if bc.method:
+                lines.append(f"  Method: {bc.method}")
             lines.append("")
 
         # Key verification - show all verifications (GitHub and/or Gerrit)
