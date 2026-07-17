@@ -351,6 +351,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -388,6 +390,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -426,6 +430,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -471,6 +477,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -528,6 +536,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -572,6 +582,8 @@ class TestGerritVerification:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
         mock_workflow.create_validation_summary.return_value = (
@@ -645,6 +657,8 @@ class TestGerritVerification:
         mock_result.version_info.build_metadata = None
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
 
         mock_workflow.validate_tag_location.return_value = async_return(mock_result)
 
@@ -719,6 +733,8 @@ class TestRequireBranchNormalization:
         mock_result.version_info.is_development = False
         mock_result.increment_check = None
         mock_result.branch_check = None
+        mock_result.age_check = None
+        mock_result.latest_check = None
         return mock_result
 
     @patch("tag_validate.cli.ValidationWorkflow")
@@ -752,3 +768,91 @@ class TestRequireBranchNormalization:
         assert result.exit_code == 0
         call_args = mock_workflow_class.call_args[0][0]
         assert call_args.require_branch == "main"
+
+
+class TestRequireRecentLatestOptions:
+    """Test --require-recent and --require-latest option handling."""
+
+    _mock_result = staticmethod(TestRequireBranchNormalization._mock_result)
+
+    def _invoke(self, mock_workflow_class, args):
+        """Invoke verify with a passing mocked workflow."""
+        mock_workflow = Mock()
+        mock_workflow_class.return_value = mock_workflow
+        mock_workflow.validate_tag_location.return_value = async_return(
+            self._mock_result()
+        )
+        mock_workflow.create_validation_summary.return_value = "PASSED"
+        return runner.invoke(app, ["verify", "v1.0.0", *args])
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_true_uses_default_window(self, mock_workflow_class):
+        """--require-recent true selects the default 3-minute window."""
+        result = self._invoke(mock_workflow_class, ["--require-recent", "true"])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.max_tag_age_minutes == 3.0
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_custom_minutes(self, mock_workflow_class):
+        """--require-recent 10 selects a 10-minute window."""
+        result = self._invoke(mock_workflow_class, ["--require-recent", "10"])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.max_tag_age_minutes == 10.0
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_disabled(self, mock_workflow_class):
+        """A padded disable value (' false ') disables the age check."""
+        result = self._invoke(mock_workflow_class, ["--require-recent", " false "])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.max_tag_age_minutes is None
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_invalid_value_rejected(self, mock_workflow_class):
+        """A non-numeric window value exits with EXIT_INVALID_INPUT."""
+        result = self._invoke(mock_workflow_class, ["--require-recent", "soon"])
+
+        assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_negative_value_rejected(self, mock_workflow_class):
+        """A negative window value exits with EXIT_INVALID_INPUT."""
+        result = self._invoke(mock_workflow_class, ["--require-recent=-5"])
+
+        assert result.exit_code == 3
+
+    @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "infinity"])
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_recent_non_finite_value_rejected(self, mock_workflow_class, value):
+        """Non-finite window values exit with EXIT_INVALID_INPUT.
+
+        NaN comparisons are always False, so an unrejected 'nan' window
+        would silently disable the age gate.
+        """
+        result = self._invoke(mock_workflow_class, [f"--require-recent={value}"])
+
+        assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_require_latest_flag(self, mock_workflow_class):
+        """--require-latest enables the latest-commit check."""
+        result = self._invoke(mock_workflow_class, ["--require-latest"])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.require_latest is True
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_defaults_disable_both_checks(self, mock_workflow_class):
+        """Without the options, both checks stay disabled."""
+        result = self._invoke(mock_workflow_class, [])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.max_tag_age_minutes is None
+        assert call_args.require_latest is False

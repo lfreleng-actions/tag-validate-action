@@ -101,22 +101,24 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name               | Required | Default | Description                                                                                               |
-| ------------------ | -------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| tag_location       | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)                                            |
-| tag_string         | False    | ''      | Tag string to check (version format, signature check skipped)                                             |
-| require_type       | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated)                                   |
-| require_signed     | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`                                              |
-| require_github     | False    | false   | Requires that signing key is registered to a GitHub account                                               |
-| require_gerrit     | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname) |
-| require_owner      | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                              |
-| reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                          |
-| enforce_increment  | False    | false   | Require tag to be strictly greater than the highest existing tag in the repository                        |
-| require_branch     | False    | ''      | Require tag commit reachable from a branch (name, or `true` to auto-detect the default branch)            |
-| permit_missing     | False    | false   | Allow missing tags without error                                                                          |
-| token              | False    | ''      | GitHub token for authenticated API calls and private repo access                                          |
-| github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                          |
-| debug              | False    | false   | Enable debug output including git error messages                                                          |
+| Name               | Required | Default | Description                                                                                                            |
+| ------------------ | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| tag_location       | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)                                                         |
+| tag_string         | False    | ''      | Tag string to check (version format, signature check skipped)                                                          |
+| require_type       | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated)                                                |
+| require_signed     | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`                                                           |
+| require_github     | False    | false   | Requires that signing key is registered to a GitHub account                                                            |
+| require_gerrit     | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname)              |
+| require_owner      | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                                           |
+| reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                                       |
+| enforce_increment  | False    | false   | Require tag to be strictly greater than the highest existing tag in the repository                                     |
+| require_branch     | False    | ''      | Require tag commit reachable from a branch (name, or `true` to auto-detect the default branch)                         |
+| require_recent     | False    | false   | Require tag created within a time window (`true` for 3 minutes, or a custom window in minutes); needs an annotated tag |
+| require_latest     | False    | false   | Require tag to point to the current tip commit of the target branch                                                    |
+| permit_missing     | False    | false   | Allow missing tags without error                                                                                       |
+| token              | False    | ''      | GitHub token for authenticated API calls and private repo access                                                       |
+| github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                                       |
+| debug              | False    | false   | Enable debug output including git error messages                                                                       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -416,6 +418,72 @@ Not supported with `tag_string` (requires a repository context).
     token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+#### `require_recent`
+
+Requires the tag to have been created within a time window. This
+prevents accidental pushes of stale tags (e.g. old test tags left in a
+local clone or fork) from creating faulty releases.
+
+**Accepted values:**
+
+- `true` to use the default 3-minute window
+- A window in minutes (e.g. `10`, fractional values allowed)
+- Empty, `false`, `no`, or `0` to disable the check
+
+**Behavior:**
+
+- Uses the tag object's creation timestamp, so the check needs an
+  annotated (or signed) tag; lightweight tags fail closed because they
+  carry no creation timestamp
+- Timestamps more than five minutes in the future fail closed (the
+  timestamp cannot be trusted)
+- Note: tagger timestamps come from the tag creator's clock and are
+  not tamper-proof; this gate prevents accidental mistakes rather than
+  deliberate forgery. Combine with `require_latest` for a check that
+  cannot be forged.
+
+Not supported with `tag_string` (requires a repository context).
+
+**Example:**
+
+```yaml
+- name: "Check tag was created in the last 3 minutes"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    require_recent: true
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### `require_latest`
+
+Requires the tag to point to the current tip commit of the target
+branch. This prevents releases that point to an older commit SHA, e.g.
+a stale tag pushed from an out-of-date clone.
+
+**Behavior:**
+
+- The target branch is `require_branch` when it names a concrete
+  branch, otherwise the repository default branch
+- Prefers the GitHub API, falling back to `git ls-remote` against the
+  origin remote; both query the authoritative remote so stale local
+  refs cannot skew the result
+- Fails closed: when the branch tip cannot be determined, validation
+  fails
+- A commit pushed to the branch between tagging and validation makes
+  the check fail; recreate the tag on the new tip
+
+Not supported with `tag_string` (requires a repository context).
+
+**Example:**
+
+```yaml
+- name: "Check tag points to the latest commit"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    require_latest: true
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
 #### `permit_missing`
 
 When set to `true`, the action will not fail if:
@@ -512,6 +580,8 @@ When enabled, the action will output:
 | tag_name        | The tag name under inspection                                                                  |
 | incremental     | Set to `true` if tag increments the repository version (empty when check not performed)        |
 | latest_tag      | Highest existing comparable tag used as the baseline (empty when check not performed)          |
+| recent          | Set to `true` if tag was created within the `require_recent` window (empty when not performed) |
+| latest          | Set to `true` if tag points to the current branch tip (empty when check not performed)         |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -532,6 +602,8 @@ When using the Python CLI (`tag-validate`), the following exit codes are returne
 | 6         | EXIT_AUTH_FAILED         | Gerrit authentication failed (invalid username or password)                  |
 | 7         | EXIT_NOT_INCREMENTAL     | Tag does not increment the repository version (`--enforce-increment`)        |
 | 8         | EXIT_BRANCH_CHECK_FAILED | Tag commit not reachable from the required branch (`--require-branch`)       |
+| 9         | EXIT_TAG_NOT_RECENT      | Tag not created within the required time window (`--require-recent`)         |
+| 10        | EXIT_NOT_LATEST          | Tag commit is not the current branch tip (`--require-latest`)                |
 
 <!-- markdownlint-enable MD013 -->
 

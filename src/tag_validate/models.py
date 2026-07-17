@@ -231,6 +231,63 @@ class BranchCheckInfo(BaseModel):
     )
 
 
+class TagAgeCheckInfo(BaseModel):
+    """Result of checking that a tag was created recently."""
+
+    checked: bool = Field(
+        False, description="Whether the tag age check was performed"
+    )
+    recent: bool | None = Field(
+        None,
+        description=(
+            "Whether the tag was created within the allowed window "
+            "(None when not checked or indeterminate)"
+        ),
+    )
+    tag_date: str | None = Field(
+        None, description="ISO 8601 timestamp when the tag was created"
+    )
+    age_seconds: float | None = Field(
+        None, description="Age of the tag at validation time, in seconds"
+    )
+    max_age_minutes: float | None = Field(
+        None, description="Maximum permitted tag age, in minutes"
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="Errors encountered during the check"
+    )
+
+
+class LatestCheckInfo(BaseModel):
+    """Result of checking that a tag points to the tip of a branch."""
+
+    checked: bool = Field(
+        False, description="Whether the latest-commit check was performed"
+    )
+    latest: bool | None = Field(
+        None,
+        description=(
+            "Whether the tag commit is the current tip of the branch "
+            "(None when not checked or indeterminate)"
+        ),
+    )
+    branch: str | None = Field(
+        None, description="Branch the tag commit was compared against"
+    )
+    tag_sha: str | None = Field(
+        None, description="Commit SHA the tag points to"
+    )
+    branch_sha: str | None = Field(
+        None, description="Commit SHA at the tip of the branch"
+    )
+    method: str | None = Field(
+        None, description="Method used for the check (api or git)"
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="Errors encountered during the check"
+    )
+
+
 class ValidationConfig(BaseModel):
     """Configuration for tag validation workflow."""
 
@@ -270,6 +327,21 @@ class ValidationConfig(BaseModel):
             "Use 'true' to auto-detect the repository default branch."
         ),
     )
+    max_tag_age_minutes: float | None = Field(
+        None,
+        description=(
+            "Require the tag to have been created within this many "
+            "minutes (None disables the check)"
+        ),
+    )
+    require_latest: bool = Field(
+        False,
+        description=(
+            "Require the tag commit to be the current tip of the "
+            "target branch (require_branch when set, otherwise the "
+            "repository default branch)"
+        ),
+    )
 
     # Configuration metadata
     config_source: str | None = Field(None, description="Source of configuration")
@@ -293,6 +365,12 @@ class ValidationResult(BaseModel):
     )
     branch_check: BranchCheckInfo | None = Field(
         None, description="Branch containment check result"
+    )
+    age_check: TagAgeCheckInfo | None = Field(
+        None, description="Tag age (freshness) check result"
+    )
+    latest_check: LatestCheckInfo | None = Field(
+        None, description="Latest-commit (branch tip) check result"
     )
 
     # Validation configuration used

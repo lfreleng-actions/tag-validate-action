@@ -106,6 +106,25 @@ inputs:
       (tag_location or tag push event); not supported with tag_string.
     required: false
     default: ''
+  require_recent:
+    description: >-
+      Require the tag to have been created recently. Provide 'true'
+      for the default 3-minute window, or a number of minutes. Uses
+      the tag object's creation timestamp, so an annotated (or
+      signed) tag is required; lightweight tags fail this check.
+      Empty, 'false', 'no', or '0' disable the check. Requires a
+      repository context; not supported with tag_string.
+    required: false
+    default: 'false'
+  require_latest:
+    description: >-
+      Require the tag to point to the current tip commit of the
+      target branch (require_branch when it names a branch, otherwise
+      the repository default branch). Prevents releases from older
+      commits. Requires a repository context; not supported with
+      tag_string.
+    required: false
+    default: 'false'
   permit_missing:
     description: 'Allow missing tags without error'
     required: false
@@ -185,6 +204,16 @@ outputs:
       Highest existing comparable tag found in the repository during the
       increment check (empty when increment check not performed)
     value: ${{ steps.validate.outputs.latest_tag }}
+  recent:
+    description: >-
+      Set true if the tag was created within the require_recent window
+      (empty when the tag age check not performed)
+    value: ${{ steps.validate.outputs.recent }}
+  latest:
+    description: >-
+      Set true if the tag points to the current tip of the target
+      branch (empty when the latest-commit check not performed)
+    value: ${{ steps.validate.outputs.latest }}
   artifact_path:
     description: 'Path to the JSON artifact file (if uploaded)'
     value: ${{ steps.validate.outputs.artifact_path }}
@@ -296,6 +325,16 @@ runs:
         case "${REQUIRE_BRANCH_LOWER}" in
           false|no|0) REQUIRE_BRANCH="" ;;
         esac
+        # require_recent accepts true (default window) or minutes;
+        # false/no/0/empty disable the check. Trim surrounding
+        # whitespace only: deleting internal whitespace could silently
+        # change a numeric value (e.g. '1 0' becoming '10'); the CLI
+        # rejects such malformed values instead
+        REQUIRE_RECENT=$(printf '%s\n' "${INPUTS_REQUIRE_RECENT}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        case "${REQUIRE_RECENT}" in
+          false|no|0) REQUIRE_RECENT="" ;;
+        esac
+        REQUIRE_LATEST=$(printf '%s\n' "${INPUTS_REQUIRE_LATEST}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         PERMIT_MISSING=$(printf '%s\n' "${INPUTS_PERMIT_MISSING}" | tr '[:upper:]' '[:lower:]')
         DEBUG=$(printf '%s\n' "${INPUTS_DEBUG}" | tr '[:upper:]' '[:lower:]')
         USE_LOCAL_ACTION=$(printf '%s\n' "${INPUTS_USE_LOCAL_ACTION}" | tr '[:upper:]' '[:lower:]')
@@ -339,8 +378,9 @@ runs:
         # Increment/branch checks need a repository context; they cannot
         # run against a bare version string
         if [ "${USE_VERSION_ONLY}" = "true" ]; then
-          if [ "${ENFORCE_INCREMENT}" = "true" ] || [ -n "${REQUIRE_BRANCH}" ]; then
-            echo "Error: enforce_increment and require_branch require a repository context" >&2
+          if [ "${ENFORCE_INCREMENT}" = "true" ] || [ -n "${REQUIRE_BRANCH}" ] || \
+             [ -n "${REQUIRE_RECENT}" ] || [ "${REQUIRE_LATEST}" = "true" ]; then
+            echo "Error: enforce_increment, require_branch, require_recent and require_latest require a repository context" >&2
             echo "Use tag_location (or a tag push event) instead of tag_string" >&2
             exit 1
           fi
@@ -413,6 +453,16 @@ runs:
         # Add require-branch if provided (only for verify command)
         if [ -n "${REQUIRE_BRANCH}" ]; then
           VERIFY_ARGS+=("--require-branch" "${REQUIRE_BRANCH}")
+        fi
+
+        # Add require-recent if provided (only for verify command)
+        if [ -n "${REQUIRE_RECENT}" ]; then
+          VERIFY_ARGS+=("--require-recent" "${REQUIRE_RECENT}")
+        fi
+
+        # Add require-latest flag if enabled (only for verify command)
+        if [ "${REQUIRE_LATEST}" = "true" ]; then
+          VERIFY_ARGS+=("--require-latest")
         fi
 
         # Add permit_missing flag if enabled (applies to both)
@@ -573,6 +623,8 @@ runs:
         has_prefix = "false"
         incremental = ""
         latest_tag = ""
+        recent = ""
+        latest = ""
 
         # Try to parse JSON if available
         if json_output:
@@ -608,6 +660,14 @@ runs:
                 if "incremental" in data:
                     incremental = "true" if data.get("incremental") else "false"
                 latest_tag = data.get("latest_tag") or ""
+
+                # Tag age and latest-commit results follow the same
+                # convention: key present means the check ran; null
+                # means indeterminate, which fails closed (false)
+                if "recent" in data:
+                    recent = "true" if data.get("recent") else "false"
+                if "latest" in data:
+                    latest = "true" if data.get("latest") else "false"
             except Exception as e:
                 print(f"Warning: Could not parse JSON output, using defaults: {e}", file=sys.stderr)
 
@@ -621,6 +681,8 @@ runs:
             f.write(f"tag_name={tag_name}\n")
             f.write(f"incremental={incremental}\n")
             f.write(f"latest_tag={latest_tag}\n")
+            f.write(f"recent={recent}\n")
+            f.write(f"latest={latest}\n")
             f.write(f"artifact_path={artifact_dir}\n")
             f.write(f"artifact_suffix={artifact_suffix}\n")
 
@@ -645,6 +707,8 @@ runs:
         INPUTS_REJECT_DEVELOPMENT: ${{ inputs.reject_development }}
         INPUTS_ENFORCE_INCREMENT: ${{ inputs.enforce_increment }}
         INPUTS_REQUIRE_BRANCH: ${{ inputs.require_branch }}
+        INPUTS_REQUIRE_RECENT: ${{ inputs.require_recent }}
+        INPUTS_REQUIRE_LATEST: ${{ inputs.require_latest }}
         INPUTS_PERMIT_MISSING: ${{ inputs.permit_missing }}
         INPUTS_DEBUG: ${{ inputs.debug }}
         INPUTS_USE_LOCAL_ACTION: ${{ inputs.use_local_action }}
