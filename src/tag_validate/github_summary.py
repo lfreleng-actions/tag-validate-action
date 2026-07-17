@@ -163,6 +163,24 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
             if result.branch_check.branch:
                 markdown_lines.append(f"| **Required Branch** | `{result.branch_check.branch}` |")
 
+        # Tag age (freshness) result
+        if result.age_check and result.age_check.checked:
+            # Indeterminate (None) fails closed, so report it as false
+            recent = bool(result.age_check.recent)
+            markdown_lines.append(f"| **Recent** | `{str(recent).lower()}` |")
+            if result.age_check.max_age_minutes is not None:
+                markdown_lines.append(
+                    f"| **Freshness Window** | `{result.age_check.max_age_minutes:g} minute(s)` |"
+                )
+
+        # Latest commit (branch tip) result
+        if result.latest_check and result.latest_check.checked:
+            # Indeterminate (None) fails closed, so report it as false
+            latest = bool(result.latest_check.latest)
+            markdown_lines.append(f"| **Latest Commit** | `{str(latest).lower()}` |")
+            if result.latest_check.branch:
+                markdown_lines.append(f"| **Target Branch** | `{result.latest_check.branch}` |")
+
         markdown_lines.append("")
 
         # Write to summary file

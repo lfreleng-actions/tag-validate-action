@@ -4,6 +4,7 @@
 """Tests for tag increment and branch containment checks."""
 
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -12,13 +13,15 @@ from tag_validate.increment_check import (
     RepoContext,
     check_branch_containment,
     check_increment,
+    check_latest_commit,
+    check_tag_age,
     compare_calver,
     compare_semver,
     detect_repo_context,
     list_repository_tags,
     resolve_default_branch,
 )
-from tag_validate.models import ValidationConfig
+from tag_validate.models import TagInfo, ValidationConfig
 from tag_validate.validation import TagValidator
 from tag_validate.workflow import ValidationWorkflow
 
@@ -684,3 +687,260 @@ class TestWorkflowIntegration:
         assert result.branch_check.checked is True
         assert result.branch_check.contains is None
         assert any("simulated network failure" in e for e in result.branch_check.errors)
+
+    @pytest.mark.asyncio
+    async def test_require_recent_allows_fresh_tag(self, git_repo, no_actions_env):
+        """A freshly created annotated tag passes the age check."""
+        _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+
+        config = ValidationConfig(max_tag_age_minutes=3.0)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.age_check is not None
+        assert result.age_check.recent is True
+
+    @pytest.mark.asyncio
+    async def test_require_recent_blocks_old_tag(self, git_repo, no_actions_env):
+        """An annotated tag created in the past fails the age check."""
+        import os
+
+        subprocess.run(
+            ["git", "tag", "-a", "v1.0.0", "-m", "Stale release"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+            env={
+                **os.environ,
+                "GIT_COMMITTER_DATE": "2020-01-01T00:00:00 +0000",
+            },
+        )
+
+        config = ValidationConfig(max_tag_age_minutes=3.0)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.is_valid is False
+        assert result.age_check is not None
+        assert result.age_check.recent is False
+
+    @pytest.mark.asyncio
+    async def test_require_recent_fails_lightweight_tag(self, git_repo, no_actions_env):
+        """A lightweight tag fails the age check closed."""
+        _git(git_repo, "tag", "v1.0.0")
+
+        config = ValidationConfig(max_tag_age_minutes=3.0)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.is_valid is False
+        assert result.age_check is not None
+        assert result.age_check.recent is None
+        assert any("lightweight" in e for e in result.age_check.errors)
+
+    @pytest.mark.asyncio
+    async def test_require_latest_allows_tip_tag(self, git_repo, no_actions_env):
+        """A tag pointing at the branch tip passes the latest check."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+
+        config = ValidationConfig(require_latest=True)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.latest_check is not None
+        assert result.latest_check.latest is True
+        assert result.latest_check.branch == "main"
+
+    @pytest.mark.asyncio
+    async def test_require_latest_blocks_stale_tag(self, git_repo, no_actions_env):
+        """A tag pointing behind the branch tip fails the latest check."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Stale release")
+        (git_repo / "newer.txt").write_text("newer\n")
+        _git(git_repo, "add", ".")
+        _git(git_repo, "commit", "-m", "Newer commit on main")
+
+        config = ValidationConfig(require_latest=True)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.is_valid is False
+        assert result.latest_check is not None
+        assert result.latest_check.latest is False
+
+    @pytest.mark.asyncio
+    async def test_require_latest_fails_closed_on_error(
+        self, git_repo, no_actions_env, monkeypatch
+    ):
+        """An unexpected latest-check error fails closed, not aborts."""
+        _git(git_repo, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("simulated network failure")
+
+        monkeypatch.setattr("tag_validate.increment_check.check_latest_commit", boom)
+        config = ValidationConfig(require_latest=True)
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.is_valid is False
+        assert result.latest_check is not None
+        assert result.latest_check.checked is True
+        assert result.latest_check.latest is None
+        assert any("simulated network failure" in e for e in result.latest_check.errors)
+
+
+def _tag_info(
+    tag_type: str = "annotated",
+    tag_date: str | None = None,
+) -> TagInfo:
+    """Build a TagInfo for tag age check tests."""
+    return TagInfo(
+        tag_name="v1.0.0",
+        tag_type=tag_type,
+        commit_sha="a" * 40,
+        tag_date=tag_date,
+    )
+
+
+class TestCheckTagAge:
+    """Tests for the tag age (freshness) check."""
+
+    NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _at(self, **delta) -> str:
+        """Return an ISO timestamp offset from the reference time."""
+        return (self.NOW - timedelta(**delta)).isoformat()
+
+    def test_fresh_tag_passes(self):
+        """A tag created within the window is recent."""
+        info = check_tag_age(_tag_info(tag_date=self._at(minutes=1)), 3.0, now=self.NOW)
+        assert info.recent is True
+        assert info.age_seconds == pytest.approx(60.0)
+
+    def test_old_tag_fails(self):
+        """A tag older than the window fails the check."""
+        info = check_tag_age(_tag_info(tag_date=self._at(days=210)), 3.0, now=self.NOW)
+        assert info.recent is False
+        assert any("exceeding" in e for e in info.errors)
+
+    def test_boundary_age_passes(self):
+        """A tag exactly at the window boundary passes."""
+        info = check_tag_age(_tag_info(tag_date=self._at(minutes=3)), 3.0, now=self.NOW)
+        assert info.recent is True
+
+    def test_lightweight_tag_fails_closed(self):
+        """A lightweight tag has no timestamp and fails closed."""
+        info = check_tag_age(_tag_info(tag_type="lightweight"), 3.0)
+        assert info.recent is None
+        assert any("lightweight" in e for e in info.errors)
+
+    @pytest.mark.parametrize(
+        "window", [float("nan"), float("inf"), float("-inf"), 0.0, -3.0]
+    )
+    def test_invalid_window_fails_closed(self, window):
+        """Non-finite or non-positive windows fail closed.
+
+        NaN comparisons are always False, so an unrejected NaN window
+        would fail open for programmatic callers bypassing the CLI.
+        """
+        info = check_tag_age(
+            _tag_info(tag_date=self._at(minutes=1)), window, now=self.NOW
+        )
+        assert info.recent is None
+        assert any("finite positive" in e for e in info.errors)
+
+    def test_missing_timestamp_fails_closed(self):
+        """An annotated tag without a parsed date fails closed."""
+        info = check_tag_age(_tag_info(tag_date=None), 3.0)
+        assert info.recent is None
+        assert any("could not be determined" in e for e in info.errors)
+        assert not any("lightweight" in e for e in info.errors)
+
+    def test_unparsable_timestamp_fails_closed(self):
+        """An unparsable timestamp fails closed."""
+        info = check_tag_age(_tag_info(tag_date="not-a-date"), 3.0)
+        assert info.recent is None
+        assert any("unparsable" in e for e in info.errors)
+
+    def test_small_future_skew_passes(self):
+        """A timestamp slightly in the future (clock skew) passes.
+
+        The reported age is clamped to zero so consumers never see a
+        confusing negative age for tolerated skew.
+        """
+        info = check_tag_age(
+            _tag_info(tag_date=self._at(minutes=-2)), 3.0, now=self.NOW
+        )
+        assert info.recent is True
+        assert info.age_seconds == 0.0
+
+    def test_far_future_timestamp_fails_closed(self):
+        """A timestamp far in the future fails closed."""
+        info = check_tag_age(_tag_info(tag_date=self._at(hours=-2)), 3.0, now=self.NOW)
+        assert info.recent is None
+        assert info.age_seconds is None
+        assert any("future" in e for e in info.errors)
+
+    def test_naive_timestamp_assumed_utc(self):
+        """A timestamp without timezone info is treated as UTC."""
+        naive = (self.NOW - timedelta(minutes=1)).replace(tzinfo=None)
+        info = check_tag_age(_tag_info(tag_date=naive.isoformat()), 3.0, now=self.NOW)
+        assert info.recent is True
+
+
+class TestCheckLatestCommit:
+    """Tests for the latest-commit (branch tip) check."""
+
+    @pytest.mark.asyncio
+    async def test_tag_at_tip_passes(self, git_repo, no_actions_env):
+        """A tag commit equal to the branch tip passes."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        tip = _git(git_repo, "rev-parse", "HEAD")
+
+        info = await check_latest_commit("v1.0.0", tip, "main", git_repo)
+        assert info.latest is True
+        assert info.branch_sha == tip
+        assert info.method == "git"
+
+    @pytest.mark.asyncio
+    async def test_tag_behind_tip_fails(self, git_repo, no_actions_env):
+        """A tag commit behind the branch tip fails."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        old = _git(git_repo, "rev-parse", "HEAD")
+        (git_repo / "two.txt").write_text("two\n")
+        _git(git_repo, "add", ".")
+        _git(git_repo, "commit", "-m", "Second commit")
+
+        info = await check_latest_commit("v1.0.0", old, "main", git_repo)
+        assert info.latest is False
+        assert any("latest commit" in e for e in info.errors)
+
+    @pytest.mark.asyncio
+    async def test_default_branch_sentinel(self, git_repo, no_actions_env):
+        """The 'true' sentinel resolves the default branch."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        tip = _git(git_repo, "rev-parse", "HEAD")
+
+        info = await check_latest_commit("v1.0.0", tip, "true", git_repo)
+        assert info.latest is True
+        assert info.branch == "main"
+
+    @pytest.mark.asyncio
+    async def test_missing_branch_fails_closed(self, git_repo, no_actions_env):
+        """An unresolvable branch tip fails closed."""
+        _git(git_repo, "remote", "add", "origin", str(git_repo))
+        tip = _git(git_repo, "rev-parse", "HEAD")
+
+        info = await check_latest_commit("v1.0.0", tip, "no-such-branch", git_repo)
+        assert info.latest is None
+        assert any("Could not determine" in e for e in info.errors)
+
+    @pytest.mark.asyncio
+    async def test_no_remote_fails_closed(self, git_repo, no_actions_env):
+        """A repository without an origin remote fails closed."""
+        tip = _git(git_repo, "rev-parse", "HEAD")
+
+        info = await check_latest_commit("v1.0.0", tip, "main", git_repo)
+        assert info.latest is None

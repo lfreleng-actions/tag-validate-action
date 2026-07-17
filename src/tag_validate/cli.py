@@ -10,6 +10,7 @@ verifying cryptographic signatures, and checking key registration on GitHub.
 
 import asyncio
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -45,6 +46,8 @@ EXIT_MISSING_CREDENTIALS = 5  # Required credentials not provided (Gerrit)
 EXIT_AUTH_FAILED = 6  # Authentication failed (invalid credentials)
 EXIT_NOT_INCREMENTAL = 7  # Tag does not increment the repository version
 EXIT_BRANCH_CHECK_FAILED = 8  # Tag commit not reachable from required branch
+EXIT_TAG_NOT_RECENT = 9  # Tag not created within the required time window
+EXIT_NOT_LATEST = 10  # Tag commit is not the current branch tip
 
 
 class CustomTyper(typer.Typer):
@@ -1742,6 +1745,24 @@ def verify(
             "repository default branch."
         ),
     ),
+    require_recent: str | None = typer.Option(
+        None,
+        "--require-recent",
+        help=(
+            "Require the tag to have been created recently. Pass "
+            "'true' for the default 3-minute window, or a number of "
+            "minutes. Requires an annotated (or signed) tag."
+        ),
+    ),
+    require_latest: bool = typer.Option(
+        False,
+        "--require-latest",
+        help=(
+            "Require the tag commit to be the current tip of the "
+            "target branch (--require-branch when set, otherwise the "
+            "repository default branch)"
+        ),
+    ),
     skip_version_validation: bool = typer.Option(
         False,
         "--skip-version-validation",
@@ -1988,6 +2009,48 @@ def verify(
             # carry stray spaces around a branch name or sentinel value
             require_branch_value = (require_branch or "").strip()
 
+            # Parse require_recent option: 'true' selects the default
+            # window, a number selects a custom window in minutes
+            from .increment_check import DEFAULT_TAG_AGE_MINUTES
+
+            max_tag_age_minutes: float | None = None
+            require_recent_value = (require_recent or "").strip().lower()
+            if require_recent_value and require_recent_value not in (
+                "false",
+                "no",
+                "0",
+            ):
+                if require_recent_value in ("true", "yes"):
+                    max_tag_age_minutes = DEFAULT_TAG_AGE_MINUTES
+                else:
+                    try:
+                        max_tag_age_minutes = float(require_recent_value)
+                    except ValueError:
+                        max_tag_age_minutes = None
+                    if (
+                        max_tag_age_minutes is None
+                        or not math.isfinite(max_tag_age_minutes)
+                        or max_tag_age_minutes <= 0
+                    ):
+                        error_msg = (
+                            f"Invalid --require-recent value "
+                            f"'{require_recent}': pass 'true' or a "
+                            "positive number of minutes"
+                        )
+                        if json_output:
+                            console.print_json(
+                                data={
+                                    "success": False,
+                                    "error": error_msg,
+                                    "exit_code": EXIT_INVALID_INPUT,
+                                }
+                            )
+                        else:
+                            console.print(
+                                f"\n[red]❌ Error:[/red] {error_msg}"
+                            )
+                        raise typer.Exit(EXIT_INVALID_INPUT)
+
             # Build configuration
             config = ValidationConfig(
                 require_semver=("semver" in require_type_list or "both" in require_type_list) if require_type_list else False,
@@ -2003,6 +2066,8 @@ def verify(
                 allow_prefix=True,  # Default to allowing version prefixes
                 enforce_increment=enforce_increment,
                 require_branch=require_branch_value if require_branch_value and require_branch_value.lower() not in ("false", "no", "0") else None,
+                max_tag_age_minutes=max_tag_age_minutes,
+                require_latest=require_latest,
                 config_source="CLI",  # Mark as CLI-originated config
             )
 
@@ -2192,6 +2257,14 @@ def verify(
                 if result.branch_check and result.branch_check.checked:
                     output["branch"] = result.branch_check.branch
                     output["branch_valid"] = result.branch_check.contains
+                if result.age_check and result.age_check.checked:
+                    output["recent"] = result.age_check.recent
+                    output["tag_age_seconds"] = result.age_check.age_seconds
+                    output["max_tag_age_minutes"] = result.age_check.max_age_minutes
+                if result.latest_check and result.latest_check.checked:
+                    output["latest"] = result.latest_check.latest
+                    output["latest_branch"] = result.latest_check.branch
+                    output["branch_sha"] = result.latest_check.branch_sha
 
                 console.print_json(data=output)
             else:
@@ -2267,6 +2340,14 @@ def verify(
                 if result.branch_check and result.branch_check.checked:
                     output["branch"] = result.branch_check.branch
                     output["branch_valid"] = result.branch_check.contains
+                if result.age_check and result.age_check.checked:
+                    output["recent"] = result.age_check.recent
+                    output["tag_age_seconds"] = result.age_check.age_seconds
+                    output["max_tag_age_minutes"] = result.age_check.max_age_minutes
+                if result.latest_check and result.latest_check.checked:
+                    output["latest"] = result.latest_check.latest
+                    output["latest_branch"] = result.latest_check.branch
+                    output["branch_sha"] = result.latest_check.branch_sha
 
                 # Write to file
                 try:
@@ -2297,6 +2378,18 @@ def verify(
                     and result.branch_check.contains is not True
                 ):
                     raise typer.Exit(EXIT_BRANCH_CHECK_FAILED)
+                if (
+                    result.age_check
+                    and result.age_check.checked
+                    and result.age_check.recent is not True
+                ):
+                    raise typer.Exit(EXIT_TAG_NOT_RECENT)
+                if (
+                    result.latest_check
+                    and result.latest_check.checked
+                    and result.latest_check.latest is not True
+                ):
+                    raise typer.Exit(EXIT_NOT_LATEST)
 
                 # Check for specific error types and return appropriate exit codes
                 error_messages = " ".join(result.errors).lower()

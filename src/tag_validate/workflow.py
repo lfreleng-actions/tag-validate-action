@@ -248,6 +248,22 @@ class ValidationWorkflow:
                 result.is_valid = False
                 return result
 
+        # Step 2d: Require the tag to be recently created (if requested)
+        if self.config.max_tag_age_minutes is not None:
+            age_ok = self._check_tag_age(tag_name, tag_info, result)
+            if not age_ok:
+                result.is_valid = False
+                return result
+
+        # Step 2e: Require the tag to be the branch tip (if requested)
+        if self.config.require_latest:
+            latest_ok = await self._check_latest(
+                tag_name, tag_info, result, github_token
+            )
+            if not latest_ok:
+                result.is_valid = False
+                return result
+
         # Step 3: Detect and validate signature
         try:
             signature_info = await self._detect_signature(tag_name, tag_info)
@@ -725,6 +741,146 @@ class ValidationWorkflow:
             )
         return False
 
+    def _check_tag_age(
+        self,
+        tag_name: str,
+        tag_info: TagInfo,
+        result: ValidationResult,
+    ) -> bool:
+        """Check that the tag was created within the allowed window.
+
+        Args:
+            tag_name: Name of the tag being validated
+            tag_info: Tag information (provides type and creation date)
+            result: ValidationResult to update
+
+        Returns:
+            bool: True if the tag is recent enough
+        """
+        from .increment_check import check_tag_age
+        from .models import TagAgeCheckInfo
+
+        max_age = self.config.max_tag_age_minutes or 0.0
+        logger.debug(
+            f"Checking tag age for {tag_name} "
+            f"(window: {max_age:g} minutes)"
+        )
+
+        try:
+            check = check_tag_age(tag_info, max_age)
+        except Exception as e:
+            # Fail closed: an unexpected error must block the release
+            # gate rather than abort validation entirely
+            result.age_check = TagAgeCheckInfo(
+                checked=True,
+                recent=None,
+                tag_date=tag_info.tag_date,
+                max_age_minutes=max_age,
+                errors=[f"Tag age check failed: {e}"],
+            )
+            result.add_error(
+                f"Tag age check failed for tag '{tag_name}': {e}"
+            )
+            return False
+        result.age_check = check
+
+        if check.recent:
+            result.add_info(
+                f"Tag was created within the last "
+                f"{max_age:g} minute(s)"
+            )
+            return True
+
+        for error in check.errors:
+            result.add_error(error)
+        if not check.errors:
+            result.add_error(
+                f"Tag '{tag_name}' was not created within the last "
+                f"{max_age:g} minute(s)"
+            )
+        return False
+
+    async def _check_latest(
+        self,
+        tag_name: str,
+        tag_info: TagInfo,
+        result: ValidationResult,
+        github_token: str | None = None,
+    ) -> bool:
+        """Check that the tag commit is the current tip of the branch.
+
+        The target branch is require_branch when it names a concrete
+        branch, otherwise the repository default branch.
+
+        Args:
+            tag_name: Name of the tag being validated
+            tag_info: Tag information (provides the commit SHA)
+            result: ValidationResult to update
+            github_token: GitHub API token (optional)
+
+        Returns:
+            bool: True if the tag commit is the branch tip
+        """
+        from .increment_check import (
+            check_latest_commit,
+            detect_repo_context,
+        )
+        from .models import LatestCheckInfo
+
+        # Reuse the branch gate's target when it names a concrete
+        # branch; 'true' (or unset) auto-detects the default branch
+        branch = self.config.require_branch or "true"
+        logger.debug(
+            f"Checking tag {tag_name} points to the tip of "
+            f"branch: {branch}"
+        )
+
+        owner, repo = self._current_repo_context or (None, None)
+        context = detect_repo_context(Path(self.repo_path), owner, repo)
+
+        try:
+            check = await check_latest_commit(
+                tag_name=tag_name,
+                commit_sha=tag_info.commit_sha,
+                branch=branch,
+                repo_path=Path(self.repo_path),
+                context=context,
+                token=github_token,
+            )
+        except Exception as e:
+            # Fail closed: an unexpected error (network/IO) must block
+            # the release gate rather than abort validation entirely
+            result.latest_check = LatestCheckInfo(
+                checked=True,
+                latest=None,
+                # The sentinel 'true' means auto-detect; only a concrete
+                # branch name is meaningful in diagnostics
+                branch=branch if branch.lower() != "true" else None,
+                tag_sha=tag_info.commit_sha,
+                errors=[f"Latest-commit check failed: {e}"],
+            )
+            result.add_error(
+                f"Latest-commit check failed for tag '{tag_name}': {e}"
+            )
+            return False
+        result.latest_check = check
+
+        if check.latest:
+            result.add_info(
+                f"Tag commit is the current tip of branch "
+                f"'{check.branch}'"
+            )
+            return True
+
+        for error in check.errors:
+            result.add_error(error)
+        if not check.errors:
+            result.add_error(
+                f"Tag '{tag_name}' commit is not the current tip of "
+                f"branch '{check.branch}'"
+            )
+        return False
+
     async def _detect_signature(self, tag_name: str, tag_info: TagInfo) -> SignatureInfo:
         """Detect signature on a tag.
 
@@ -802,41 +958,45 @@ class ValidationWorkflow:
 
         # Check if signature is required (legacy boolean mode)
         elif self.config.require_signed:
-            if signature_info.type == "unsigned":
-                result.add_error("Tag must be signed but is unsigned")
-                logger.warning("Unsigned tag when signature is required")
+            # Signature states rejected when signing is required:
+            # - unsigned/lightweight: nothing to verify
+            # - gpg-unverifiable: key missing (security risk)
+            # - invalid: corrupted or tampered signature
+            # Anything else is accepted: verified GPG/SSH, or an SSH
+            # signature without an allowed_signers file to verify
+            # against. Signature info is already shown in a dedicated
+            # section
+            rejections = {
+                "unsigned": (
+                    "Tag must be signed but is unsigned",
+                    "Unsigned tag when signature is required",
+                ),
+                "lightweight": (
+                    "Lightweight tags are not allowed when signing is required",
+                    "Lightweight tag when signature is required",
+                ),
+                "gpg-unverifiable": (
+                    "Tag has GPG signature but key is not available for verification",
+                    f"GPG signature unverifiable: "
+                    f"signer={signature_info.signer_email}, "
+                    f"key_id={signature_info.key_id}",
+                ),
+                "invalid": (
+                    "Tag signature is invalid or corrupted",
+                    f"Invalid signature: key_id={signature_info.key_id}",
+                ),
+            }
+            rejection = rejections.get(signature_info.type)
+            if rejection:
+                error_message, log_message = rejection
+                result.add_error(error_message)
+                logger.warning(log_message)
                 return False
 
-            if signature_info.type == "lightweight":
-                result.add_error("Lightweight tags are not allowed when signing is required")
-                logger.warning("Lightweight tag when signature is required")
-                return False
-
-            # Handle signature verification based on type:
-            # - gpg-unverifiable: REJECT (security risk - missing key)
-            # - invalid: REJECT (corrupted/bad signature)
-            # - SSH unverified: ACCEPT (may not have allowed_signers configured)
-            # - GPG/SSH verified: ACCEPT
-            if signature_info.type == "gpg-unverifiable":
-                # GPG signature exists but key not available for verification
-                # This is a security risk - reject it
-                result.add_error("Tag has GPG signature but key is not available for verification")
-                logger.warning(
-                    f"GPG signature unverifiable: signer={signature_info.signer_email}, "
-                    f"key_id={signature_info.key_id}"
-                )
-                return False
-            elif signature_info.type == "invalid":
-                # Corrupted or tampered signature
-                result.add_error("Tag signature is invalid or corrupted")
-                logger.warning(f"Invalid signature: key_id={signature_info.key_id}")
-                return False
-
-            else:
-                # SSH or GPG signature present but not verified
-                # For SSH, this is acceptable (may not have allowed_signers file)
-                # For GPG that's already verified, this shouldn't happen
-                # Signature info is already shown in dedicated section
+            if not signature_info.verified:
+                # SSH signature without an allowed_signers file to
+                # verify against (acceptable when only requiring a
+                # signature to be present)
                 logger.debug(
                     f"Signature present but not verified: type={signature_info.type}, "
                     f"signer={signature_info.signer_email}, key_id={signature_info.key_id}"
@@ -1140,8 +1300,8 @@ class ValidationWorkflow:
             else:
                 logger.debug(f"Git remote command failed with return code {result.returncode}")
 
-        except subprocess.TimeoutExpired:
-            logger.debug("Git remote command timed out after 5 seconds")
+        except subprocess.TimeoutExpired as e:
+            logger.debug(f"Git remote command timed out: {e}")
         except subprocess.SubprocessError as e:
             logger.debug(f"Git subprocess error while extracting GitHub org: {e}")
         except Exception as e:
@@ -1517,6 +1677,30 @@ class ValidationWorkflow:
                 lines.append(f"  Branch: {bc.branch}")
             if bc.method:
                 lines.append(f"  Method: {bc.method}")
+            lines.append("")
+
+        # Tag age (freshness)
+        if result.age_check and result.age_check.checked:
+            ac = result.age_check
+            status_icon = "✅" if ac.recent else "❌"
+            lines.append(f"Tag Freshness {status_icon}")
+            if ac.max_age_minutes is not None:
+                lines.append(f"  Window: {ac.max_age_minutes:g} minute(s)")
+            if ac.age_seconds is not None:
+                lines.append(f"  Tag Age: {ac.age_seconds:.0f} seconds")
+            lines.append("")
+
+        # Latest commit (branch tip)
+        if result.latest_check and result.latest_check.checked:
+            lc = result.latest_check
+            status_icon = "✅" if lc.latest else "❌"
+            lines.append(f"Latest Commit {status_icon}")
+            if lc.branch:
+                lines.append(f"  Branch: {lc.branch}")
+            if lc.branch_sha:
+                lines.append(f"  Branch Tip: {lc.branch_sha[:12]}")
+            if lc.method:
+                lines.append(f"  Method: {lc.method}")
             lines.append("")
 
         # Key verification - show all verifications (GitHub and/or Gerrit)
