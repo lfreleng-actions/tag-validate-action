@@ -280,7 +280,12 @@ class TagValidator:
 
         Supports common CalVer patterns:
         - YYYY.MM.DD (e.g., 2024.01.15)
-        - YYYY.MM.MICRO (e.g., 2024.01.0)
+        - YYYY.MM.MICRO (e.g., 2024.01.100)
+        - YYYY.MM.DD.MICRO (e.g., 2024.01.15.1)
+
+        In three-component versions the third component is treated as
+        a day when it is 1-31 and as a micro/patch number when it is
+        greater than 31 (0 is rejected as an invalid day).
 
         Args:
             tag: Version string to validate
@@ -334,8 +339,22 @@ class TagValidator:
                 errors=[f"Invalid month: {month} (must be 1-12)"],
             )
 
-        # Validate day if it looks like a day (1-31)
-        if day_or_micro <= 31 and micro is None:
+        # Validate day/micro component layout
+        if micro is not None:
+            # Four components: YYYY.MM.DD.MICRO (DD must be a valid day)
+            if not (1 <= day_or_micro <= 31):
+                return VersionInfo(
+                    raw=tag,
+                    is_valid=False,
+                    version_type="calver",
+                    errors=[
+                        f"Invalid day: {day_or_micro} (must be 1-31 in "
+                        "YYYY.MM.DD.MICRO format)"
+                    ],
+                )
+            day = day_or_micro
+            version_str = f"{year}.{month}.{day}.{micro}"
+        elif day_or_micro <= 31:
             # Likely YYYY.MM.DD format
             if day_or_micro < 1:
                 return VersionInfo(
@@ -350,8 +369,6 @@ class TagValidator:
             # YYYY.MM.MICRO format
             day = None
             version_str = f"{year}.{month}.{day_or_micro}"
-            if micro is not None:
-                version_str += f".{micro}"
 
         if modifier:
             version_str += f"-{modifier}"

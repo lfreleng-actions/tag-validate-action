@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# aislop quality gate configuration.
+#
+# Comment-style rules are disabled: this codebase deliberately uses
+# step/section header comments (e.g. "# Step 1: ...") to structure
+# long validation workflows, and explanatory comments accompany
+# non-obvious git/signature handling. These are established house
+# style, not AI slop. Specific false positives elsewhere use inline
+# aislop-ignore directives with reasons.
+#
+# hardcoded-id is disabled because the heuristic misreads dictionary
+# keys such as output["key_verifications"] as deployment-specific
+# provider/tenant identifiers; this codebase has no such IDs and
+# secrets detection stays active via the security engine.
+rules:
+  ai-slop/meta-comment: "off"
+  ai-slop/narrative-comment: "off"
+  ai-slop/trivial-comment: "off"
+  ai-slop/hardcoded-id: "off"

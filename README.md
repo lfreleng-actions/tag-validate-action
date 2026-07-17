@@ -111,6 +111,8 @@ jobs:
 | require_gerrit     | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname) |
 | require_owner      | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                              |
 | reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                          |
+| enforce_increment  | False    | false   | Require tag to be strictly greater than the highest existing tag in the repository                        |
+| require_branch     | False    | ''      | Require tag commit reachable from a branch (name, or `true` to auto-detect the default branch)            |
 | permit_missing     | False    | false   | Allow missing tags without error                                                                          |
 | token              | False    | ''      | GitHub token for authenticated API calls and private repo access                                          |
 | github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                          |
@@ -342,6 +344,78 @@ Development tags are identified by the presence of keywords in the tag name:
 - `v2.1.0`
 - `2024.01.15`
 
+#### `enforce_increment`
+
+When set to `true`, the pushed tag must compare **strictly greater** than
+the highest existing comparable tag in the repository. This prevents
+stale or lower-value tags (for example, tags pushed from an out-of-sync
+fork) from triggering release/publish pipelines.
+
+**Behavior:**
+
+- Repository tags get enumerated using both the GitHub API and local
+  git (union of both sources), so shallow checkouts still work
+- Comparison is scheme-aware: SemVer tags compare using SemVer
+  precedence rules, CalVer tags compare by date (and micro/patch level)
+- The pushed tag gets excluded from the baseline, so re-pushing the
+  current highest tag passes
+- The first version tag in a repository always passes
+- Non-version tags (e.g. `latest`, `some-label`) do not contribute to
+  the baseline
+
+**Fail-closed behavior (validation fails):**
+
+- The pushed tag does not parse as SemVer or CalVer
+- The pushed tag uses a different versioning scheme than all existing
+  version tags (scheme switching cannot bypass the gate)
+- Repository tags cannot be enumerated from any source
+
+**Note:** Backport releases (e.g. pushing `v1.4.9` when `v2.0.0`
+exists) get blocked when this feature is enabled. Repositories that
+need backport releases should leave `enforce_increment` disabled or
+use a separate workflow for maintenance branches.
+
+Not supported with `tag_string` (requires a repository context).
+
+**Example:**
+
+```yaml
+- name: "Check tag increments repository version"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    enforce_increment: true
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### `require_branch`
+
+Requires the tag to point to a commit reachable from the given branch.
+This prevents releases from unreviewed or orphaned commits.
+
+**Accepted values:**
+
+- A branch name (e.g. `main`, `release/2.x`)
+- `true` to auto-detect the repository default branch
+- Empty, `false`, `no`, or `0` to disable the check
+
+**Behavior:**
+
+- Prefers the GitHub compare API (reliable with shallow checkouts),
+  falling back to local git ancestry checks
+- Fails closed: when containment cannot be determined, validation fails
+
+Not supported with `tag_string` (requires a repository context).
+
+**Example:**
+
+```yaml
+- name: "Check tag is on the default branch"
+  uses: lfreleng-actions/tag-validate-action@v1
+  with:
+    require_branch: ${{ github.event.repository.default_branch }}
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
 #### `permit_missing`
 
 When set to `true`, the action will not fail if:
@@ -436,6 +510,8 @@ When enabled, the action will output:
 | development_tag | Set to `true` if tag contains pre-release/development strings                                  |
 | version_prefix  | Set to `true` if tag has leading v/V character                                                 |
 | tag_name        | The tag name under inspection                                                                  |
+| incremental     | Set to `true` if tag increments the repository version (empty when check not performed)        |
+| latest_tag      | Highest existing comparable tag used as the baseline (empty when check not performed)          |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -454,6 +530,8 @@ When using the Python CLI (`tag-validate`), the following exit codes are returne
 | 4         | EXIT_UNEXPECTED_ERROR    | Unexpected error during execution                                            |
 | 5         | EXIT_MISSING_CREDENTIALS | Gerrit credentials required but not provided (when using `--require-gerrit`) |
 | 6         | EXIT_AUTH_FAILED         | Gerrit authentication failed (invalid username or password)                  |
+| 7         | EXIT_NOT_INCREMENTAL     | Tag does not increment the repository version (`--enforce-increment`)        |
+| 8         | EXIT_BRANCH_CHECK_FAILED | Tag commit not reachable from the required branch (`--require-branch`)       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -541,12 +619,12 @@ machine gerrit.opendaylight.org login myuser password anothertoken
 
 **CLI options:**
 
-| Option | Description |
-| ------ | ----------- |
-| `--no-netrc` | Disable .netrc file lookup |
-| `--netrc-file PATH` | Use a specific .netrc file |
-| `--netrc-optional` | Do not fail if .netrc file is missing (default) |
-| `--netrc-required` | Require a .netrc file and fail if missing |
+| Option              | Description                                     |
+| ------------------- | ----------------------------------------------- |
+| `--no-netrc`        | Disable .netrc file lookup                      |
+| `--netrc-file PATH` | Use a specific .netrc file                      |
+| `--netrc-optional`  | Do not fail if .netrc file is missing (default) |
+| `--netrc-required`  | Require a .netrc file and fail if missing       |
 
 By default, `.netrc` lookup is optional (`--netrc-optional`): if no `.netrc`
 file is found, the tool continues and falls back to environment variables.

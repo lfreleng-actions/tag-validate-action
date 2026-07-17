@@ -166,6 +166,71 @@ class VersionInfo(BaseModel):
     errors: list[str] = Field(default_factory=list, description="Validation errors")
 
 
+class IncrementCheckInfo(BaseModel):
+    """Result of checking that a tag increments the repository version."""
+
+    checked: bool = Field(
+        False, description="Whether the increment check was performed"
+    )
+    incremental: bool | None = Field(
+        None,
+        description=(
+            "Whether the tag is strictly greater than every existing "
+            "comparable tag (None when not checked or indeterminate)"
+        ),
+    )
+    latest_tag: str | None = Field(
+        None,
+        description=(
+            "Baseline tag for reporting: the tag that blocked the push "
+            "when the check fails, otherwise the highest existing tag "
+            "under the scheme with the most comparable tags"
+        ),
+    )
+    latest_tags: dict[str, str] = Field(
+        default_factory=dict,
+        description="Highest existing comparable tag per versioning scheme",
+    )
+    candidate_count: int = Field(
+        0, description="Number of existing comparable tags considered"
+    )
+    scheme: str | None = Field(
+        None,
+        description="Versioning scheme(s) used for comparison",
+    )
+    tag_source: str | None = Field(
+        None,
+        description="Source used to enumerate repository tags (api, git, api+git)",
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="Errors encountered during the check"
+    )
+
+
+class BranchCheckInfo(BaseModel):
+    """Result of checking that a tag's commit is reachable from a branch."""
+
+    checked: bool = Field(
+        False, description="Whether the branch containment check was performed"
+    )
+    branch: str | None = Field(
+        None, description="Branch the tag commit was verified against"
+    )
+    contains: bool | None = Field(
+        None,
+        description=(
+            "Whether the tag commit is reachable from the branch "
+            "(None when not checked or indeterminate)"
+        ),
+    )
+    method: str | None = Field(
+        None, description="Method used for the check (api or git)"
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="Errors encountered during the check"
+    )
+
+
 class ValidationConfig(BaseModel):
     """Configuration for tag validation workflow."""
 
@@ -190,6 +255,22 @@ class ValidationConfig(BaseModel):
     reject_development: bool = Field(False, description="Reject development versions")
     allow_prefix: bool = Field(True, description="Allow 'v' prefix on versions")
 
+    # Release gating
+    enforce_increment: bool = Field(
+        False,
+        description=(
+            "Require the tag to be strictly greater than the highest "
+            "existing comparable tag in the repository"
+        ),
+    )
+    require_branch: str | None = Field(
+        None,
+        description=(
+            "Require the tag commit to be reachable from this branch. "
+            "Use 'true' to auto-detect the repository default branch."
+        ),
+    )
+
     # Configuration metadata
     config_source: str | None = Field(None, description="Source of configuration")
 
@@ -206,6 +287,12 @@ class ValidationResult(BaseModel):
     signature_info: SignatureInfo | None = Field(None, description="Signature information")
     key_verifications: list[KeyVerificationResult] = Field(
         default_factory=list, description="List of key verification results (GitHub and/or Gerrit)"
+    )
+    increment_check: IncrementCheckInfo | None = Field(
+        None, description="Tag increment (ordering) check result"
+    )
+    branch_check: BranchCheckInfo | None = Field(
+        None, description="Branch containment check result"
     )
 
     # Validation configuration used

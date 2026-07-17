@@ -88,6 +88,24 @@ inputs:
       fail for any tag identified as a development version.
     required: false
     default: 'false'
+  enforce_increment:
+    description: >-
+      Require the tag to be strictly greater than the highest existing
+      comparable tag in the repository (SemVer/CalVer aware). Prevents
+      accidental re-release of older versions, e.g. stale tags pushed
+      from out-of-sync forks. Requires a repository context
+      (tag_location or tag push event); not supported with tag_string.
+    required: false
+    default: 'false'
+  require_branch:
+    description: >-
+      Require the tag to point to a commit reachable from the given
+      branch. Provide a branch name (e.g. 'main'), or 'true' to
+      auto-detect the repository default branch. Empty, 'false', 'no',
+      or '0' disable the check. Requires a repository context
+      (tag_location or tag push event); not supported with tag_string.
+    required: false
+    default: ''
   permit_missing:
     description: 'Allow missing tags without error'
     required: false
@@ -157,6 +175,16 @@ outputs:
   tag_name:
     description: 'The tag name being validated'
     value: ${{ steps.validate.outputs.tag_name }}
+  incremental:
+    description: >-
+      Set true if the tag is strictly greater than the highest existing
+      tag in the repository (empty when increment check not performed)
+    value: ${{ steps.validate.outputs.incremental }}
+  latest_tag:
+    description: >-
+      Highest existing comparable tag found in the repository during the
+      increment check (empty when increment check not performed)
+    value: ${{ steps.validate.outputs.latest_tag }}
   artifact_path:
     description: 'Path to the JSON artifact file (if uploaded)'
     value: ${{ steps.validate.outputs.artifact_path }}
@@ -257,6 +285,17 @@ runs:
         REQUIRE_GERRIT=$(printf '%s\n' "${INPUTS_REQUIRE_GERRIT}" | tr '[:upper:]' '[:lower:]')
         REQUIRE_OWNER="${INPUTS_REQUIRE_OWNER}"
         REJECT_DEVELOPMENT=$(printf '%s\n' "${INPUTS_REJECT_DEVELOPMENT}" | tr '[:upper:]' '[:lower:]')
+        ENFORCE_INCREMENT=$(printf '%s\n' "${INPUTS_ENFORCE_INCREMENT}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        # Trim surrounding whitespace (workflow inputs may carry stray
+        # spaces); git branch names never contain whitespace
+        REQUIRE_BRANCH=$(printf '%s\n' "${INPUTS_REQUIRE_BRANCH}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # The CLI treats false/no/0 as "branch gating disabled"; normalize
+        # those values to empty (preserving branch name case) so the
+        # tag_string guard and --require-branch flag match CLI semantics
+        REQUIRE_BRANCH_LOWER=$(printf '%s\n' "${REQUIRE_BRANCH}" | tr '[:upper:]' '[:lower:]')
+        case "${REQUIRE_BRANCH_LOWER}" in
+          false|no|0) REQUIRE_BRANCH="" ;;
+        esac
         PERMIT_MISSING=$(printf '%s\n' "${INPUTS_PERMIT_MISSING}" | tr '[:upper:]' '[:lower:]')
         DEBUG=$(printf '%s\n' "${INPUTS_DEBUG}" | tr '[:upper:]' '[:lower:]')
         USE_LOCAL_ACTION=$(printf '%s\n' "${INPUTS_USE_LOCAL_ACTION}" | tr '[:upper:]' '[:lower:]')
@@ -295,6 +334,16 @@ runs:
         else
           echo "Error: Either tag_location or tag_string must be provided" >&2
           exit 1
+        fi
+
+        # Increment/branch checks need a repository context; they cannot
+        # run against a bare version string
+        if [ "${USE_VERSION_ONLY}" = "true" ]; then
+          if [ "${ENFORCE_INCREMENT}" = "true" ] || [ -n "${REQUIRE_BRANCH}" ]; then
+            echo "Error: enforce_increment and require_branch require a repository context" >&2
+            echo "Use tag_location (or a tag push event) instead of tag_string" >&2
+            exit 1
+          fi
         fi
 
         # Add validation options
@@ -354,6 +403,16 @@ runs:
         # Add reject-development flag if enabled (only for verify command)
         if [ "${REJECT_DEVELOPMENT}" = "true" ]; then
           VERIFY_ARGS+=("--reject-development")
+        fi
+
+        # Add enforce-increment flag if enabled (only for verify command)
+        if [ "${ENFORCE_INCREMENT}" = "true" ]; then
+          VERIFY_ARGS+=("--enforce-increment")
+        fi
+
+        # Add require-branch if provided (only for verify command)
+        if [ -n "${REQUIRE_BRANCH}" ]; then
+          VERIFY_ARGS+=("--require-branch" "${REQUIRE_BRANCH}")
         fi
 
         # Add permit_missing flag if enabled (applies to both)
@@ -512,6 +571,8 @@ runs:
         signature_type = "unsigned"
         is_dev = "false"
         has_prefix = "false"
+        incremental = ""
+        latest_tag = ""
 
         # Try to parse JSON if available
         if json_output:
@@ -540,6 +601,13 @@ runs:
                 # Fallback: check tag name directly (for backwards compatibility)
                 elif tag_name and tag_name[0:1] in ("v", "V"):
                     has_prefix = "true"
+
+                # Increment check results: the key is present when the
+                # check was performed; null means indeterminate, which
+                # fails closed and is reported as false
+                if "incremental" in data:
+                    incremental = "true" if data.get("incremental") else "false"
+                latest_tag = data.get("latest_tag") or ""
             except Exception as e:
                 print(f"Warning: Could not parse JSON output, using defaults: {e}", file=sys.stderr)
 
@@ -551,6 +619,8 @@ runs:
             f.write(f"development_tag={is_dev}\n")
             f.write(f"version_prefix={has_prefix}\n")
             f.write(f"tag_name={tag_name}\n")
+            f.write(f"incremental={incremental}\n")
+            f.write(f"latest_tag={latest_tag}\n")
             f.write(f"artifact_path={artifact_dir}\n")
             f.write(f"artifact_suffix={artifact_suffix}\n")
 
@@ -573,6 +643,8 @@ runs:
         INPUTS_REQUIRE_GERRIT: ${{ inputs.require_gerrit }}
         INPUTS_REQUIRE_OWNER: ${{ inputs.require_owner }}
         INPUTS_REJECT_DEVELOPMENT: ${{ inputs.reject_development }}
+        INPUTS_ENFORCE_INCREMENT: ${{ inputs.enforce_increment }}
+        INPUTS_REQUIRE_BRANCH: ${{ inputs.require_branch }}
         INPUTS_PERMIT_MISSING: ${{ inputs.permit_missing }}
         INPUTS_DEBUG: ${{ inputs.debug }}
         INPUTS_USE_LOCAL_ACTION: ${{ inputs.use_local_action }}
