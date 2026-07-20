@@ -119,6 +119,7 @@ class TestValidationWorkflow:
 
             assert result.is_valid is False
             # Check that version validation failed (errors are now in version_info.errors)
+            assert result.version_info is not None
             assert len(result.version_info.errors) > 0
             assert "Invalid version format" in result.version_info.errors[0]
 

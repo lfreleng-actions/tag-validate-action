@@ -312,6 +312,7 @@ class TestVerifyGPGKeyRegistered:
         assert result.username == "testuser"
         assert result.key_info is not None
         # Should return the primary key info, not the subkey
+        assert isinstance(result.key_info, GPGKeyInfo)
         assert result.key_info.key_id == "ABCD1234EFGH5678"
 
     @pytest.mark.asyncio
