@@ -19,6 +19,7 @@ Typical usage:
 import logging
 import re
 from pathlib import Path
+from typing import Literal
 
 from dependamerge.git_ops import clone, create_secure_tempdir, run_git, secure_rmtree
 
@@ -492,7 +493,9 @@ class TagOperations:
         )
         return result.stdout  # type: ignore[no-any-return]
 
-    async def _get_tag_type(self, tag_name: str, repo_path: Path) -> str:
+    async def _get_tag_type(
+        self, tag_name: str, repo_path: Path
+    ) -> Literal["lightweight", "annotated"]:
         """Determine if tag is annotated or lightweight.
 
         Args:

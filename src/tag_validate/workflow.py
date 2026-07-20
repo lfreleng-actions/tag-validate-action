@@ -361,9 +361,10 @@ class ValidationWorkflow:
         # Step 5: Verify key on Gerrit (if requested and signature exists)
         if self.config.require_gerrit:
             if signature_info.type in ["gpg", "ssh"] and signature_info.verified:
+                # Determine Gerrit server (bound before the try so except
+                # handlers can safely reference it)
+                gerrit_server = self.config.gerrit_server
                 try:
-                    # Determine Gerrit server
-                    gerrit_server = self.config.gerrit_server
                     github_org = None
 
                     if not gerrit_server:
@@ -1445,9 +1446,10 @@ class ValidationWorkflow:
                 # It's a local repository path
                 logger.debug(f"Treating as local repo path: {potential_repo_path}/{potential_tag}")
 
+                # Capture before the try so except handlers can restore it
+                original_repo_path = self.repo_path
                 try:
                     # Update repo path and detector temporarily
-                    original_repo_path = self.repo_path
                     self.repo_path = local_path
                     self.detector = SignatureDetector(local_path)
 
