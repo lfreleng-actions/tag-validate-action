@@ -31,8 +31,9 @@ classifiers = [
   "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = [
-  # Use dependamerge for GitHub API infrastructure
-  "dependamerge>=0.1.19",
+  # Use dependamerge for GitHub API infrastructure and secure git
+  # operations (askpass-based token passing requires >=0.9.1)
+  "dependamerge>=0.9.1",
 
   # Core dependencies (some inherited from dependamerge)
   "aiolimiter>=1.2.1",

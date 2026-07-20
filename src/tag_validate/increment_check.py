@@ -28,7 +28,7 @@ from itertools import zip_longest
 from pathlib import Path
 from urllib.parse import quote
 
-from dependamerge.git_ops import run_git
+from dependamerge.git_ops import redact_text, run_git
 
 from .models import (
     BranchCheckInfo,
@@ -169,7 +169,10 @@ def detect_repo_context(
                         match.group("repo"),
                     )
     except Exception as e:
-        logger.debug(f"Could not read origin remote URL: {e}")
+        # Redact for defense-in-depth: the origin URL handled here could
+        # carry embedded credentials in a legacy config, so never log the
+        # raw exception text verbatim.
+        logger.debug(f"Could not read origin remote URL: {redact_text(str(e))}")
 
     # Fall back to GitHub Actions environment
     gh_repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -465,11 +468,12 @@ async def _list_tags_via_api(context: RepoContext, token: str | None) -> list[st
     return tags
 
 
-def _list_tags_via_git(repo_path: Path) -> list[str]:
+def _list_tags_via_git(repo_path: Path, token: str | None = None) -> list[str]:
     """List repository tags using local git, after a best-effort fetch.
 
     Args:
         repo_path: Path to the local Git repository
+        token: Optional token for authenticated fetch (askpass-based)
 
     Returns:
         List of tag names
@@ -489,9 +493,14 @@ def _list_tags_via_git(repo_path: Path) -> list[str]:
                 cwd=repo_path,
                 check=False,
                 timeout=GIT_NETWORK_TIMEOUT,
+                token=token,
             )
     except Exception as e:
-        logger.debug(f"Best-effort tag fetch failed (continuing): {e}")
+        # Redact: a git network error may surface a credential-bearing
+        # remote URL from a legacy config.
+        logger.debug(
+            f"Best-effort tag fetch failed (continuing): {redact_text(str(e))}"
+        )
 
     result = run_git(["git", "tag", "--list"], cwd=repo_path)
     tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -535,7 +544,7 @@ async def list_repository_tags(
             logger.debug(f"GitHub API tag enumeration failed: {e}")
 
     try:
-        tags.update(_list_tags_via_git(repo_path))
+        tags.update(_list_tags_via_git(repo_path, token))
         sources.append("git")
     except Exception as e:
         git_error = e
@@ -599,12 +608,15 @@ async def resolve_default_branch(
             cwd=repo_path,
             check=False,
             timeout=GIT_NETWORK_TIMEOUT,
+            token=token,
         )
         match = re.search(r"ref:\s+refs/heads/(\S+)\s+HEAD", result.stdout)
         if match:
             return match.group(1)
     except Exception as e:
-        logger.debug(f"ls-remote HEAD lookup failed: {e}")
+        # Redact: a git network error may surface a credential-bearing
+        # remote URL from a legacy config.
+        logger.debug(f"ls-remote HEAD lookup failed: {redact_text(str(e))}")
 
     return None
 
@@ -613,6 +625,7 @@ def _git_branch_contains(
     commit_sha: str,
     branch: str,
     repo_path: Path,
+    token: str | None = None,
 ) -> bool | None:
     """Check branch containment using local git.
 
@@ -620,6 +633,7 @@ def _git_branch_contains(
         commit_sha: Commit SHA to test
         branch: Branch name
         repo_path: Path to the local Git repository
+        token: Optional token for authenticated fetch (askpass-based)
 
     Returns:
         True/False when determined, None when indeterminate
@@ -644,9 +658,12 @@ def _git_branch_contains(
                 cwd=repo_path,
                 check=False,
                 timeout=GIT_NETWORK_TIMEOUT,
+                token=token,
             )
         except Exception as e:
-            logger.debug(f"Branch fetch failed: {e}")
+            # Redact: a git network error may surface a credential-bearing
+            # remote URL from a legacy config.
+            logger.debug(f"Branch fetch failed: {redact_text(str(e))}")
         for ref in candidate_refs + ["FETCH_HEAD"]:
             result = run_git(
                 ["git", "rev-parse", "--verify", "--quiet", ref],
@@ -759,7 +776,7 @@ async def check_branch_containment(
             logger.debug(f"Compare API branch check failed: {e}")
 
     # Fall back to local git ancestry
-    contains = _git_branch_contains(commit_sha, branch, repo_path)
+    contains = _git_branch_contains(commit_sha, branch, repo_path, token)
     info.method = "git"
     info.contains = contains
     if contains is None:
@@ -928,7 +945,9 @@ async def _branch_tip_via_api(
     return None
 
 
-def _branch_tip_via_git(branch: str, repo_path: Path) -> str | None:
+def _branch_tip_via_git(
+    branch: str, repo_path: Path, token: str | None = None
+) -> str | None:
     """Fetch the tip commit SHA of a branch via git ls-remote.
 
     Queries the remote directly rather than local refs, because local
@@ -938,6 +957,7 @@ def _branch_tip_via_git(branch: str, repo_path: Path) -> str | None:
     Args:
         branch: Branch name
         repo_path: Path to the local Git repository
+        token: Optional token for authenticated lookup (askpass-based)
 
     Returns:
         Tip commit SHA, or None when it cannot be determined
@@ -947,6 +967,7 @@ def _branch_tip_via_git(branch: str, repo_path: Path) -> str | None:
         cwd=repo_path,
         check=False,
         timeout=GIT_NETWORK_TIMEOUT,
+        token=token,
     )
     for line in (result.stdout or "").splitlines():
         parts = line.split()
@@ -1009,11 +1030,13 @@ async def check_latest_commit(
 
     if not tip_sha:
         try:
-            tip_sha = _branch_tip_via_git(branch, repo_path)
+            tip_sha = _branch_tip_via_git(branch, repo_path, token)
             if tip_sha:
                 info.method = "git"
         except Exception as e:
-            logger.debug(f"Branch tip ls-remote lookup failed: {e}")
+            # Redact: a git network error may surface a credential-bearing
+            # remote URL from a legacy config.
+            logger.debug(f"Branch tip ls-remote lookup failed: {redact_text(str(e))}")
 
     if not tip_sha:
         info.latest = None

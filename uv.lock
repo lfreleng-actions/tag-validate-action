@@ -508,20 +508,22 @@ wheels = [
 
 [[package]]
 name = "dependamerge"
-version = "0.7.1"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiolimiter" },
     { name = "httpx", extra = ["http2"] },
     { name = "pydantic" },
     { name = "pygerrit2" },
+    { name = "requests" },
     { name = "rich" },
     { name = "tenacity" },
     { name = "typer" },
+    { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/8e/2fd1604ec3ed9b3a1d98ba147d920082e126caebdbeac89bc36f40d630a6/dependamerge-0.7.1.tar.gz", hash = "sha256:598e0d2c448667a2521d6048029bdccd3fcf86d4f95fc71fef3d1ff85e9d585f", size = 259517, upload-time = "2026-06-29T17:58:10.749Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/4f/f17c5dee923b6306886093ea072779cafbf4e8e4fa249dde839f075c9ae8/dependamerge-0.9.1.tar.gz", hash = "sha256:f23ad9db26e487c05053f239468fe3263586439eb83711f72f217568e1f9b75a", size = 289887, upload-time = "2026-07-21T10:54:12.305Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/3a/654001c81d95545f70b85ff071c712481c29dbd510ffd9a22ed093ec5785/dependamerge-0.7.1-py3-none-any.whl", hash = "sha256:7c80e060ef03a2f0a11ddf46160b8e3a9b032c66a76d2e7fd5a77576d647d863", size = 261564, upload-time = "2026-06-29T17:58:09.107Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/b9/c2562f0c64b109a7c6e548289895ba21ead297acf9cbfbf6336b05027cba/dependamerge-0.9.1-py3-none-any.whl", hash = "sha256:acdacc3a5e6378d7c32cf1e4b8da9d33f231eb22616eb7c67b4c868579717616", size = 295853, upload-time = "2026-07-21T10:54:10.693Z" },
 ]
 
 [[package]]
@@ -1317,7 +1319,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.12.0" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.13.1" },
     { name = "cryptography", specifier = ">=46.0.3" },
-    { name = "dependamerge", specifier = ">=0.1.19" },
+    { name = "dependamerge", specifier = ">=0.9.1" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19.1" },
     { name = "packaging", specifier = ">=24.2" },
