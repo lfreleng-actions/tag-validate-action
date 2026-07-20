@@ -174,6 +174,16 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.basedpyright]
+# Align basedpyright (used by editor LSPs such as Zed) with a sensible
+# baseline. basedpyright defaults to the stricter "recommended" mode, which
+# emits large volumes of advisory diagnostics (reportAny,
+# reportUnknownMemberType, reportImplicitStringConcatenation, etc.) that this
+# project does not enforce. "standard" matches upstream pyright's default and
+# keeps the signal aligned with the mypy-based gate.
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
+
 [tool.black]
 line-length = 88
 target-version = ['py310', 'py311', 'py312']
