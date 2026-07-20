@@ -683,7 +683,12 @@ class TestErrorHandling:
                 clear=False,
             ),
         ):
-            async with GerritKeysClient(server="gerrit.onap.org") as client:
+            # use_netrc=False keeps the check hermetic: without it, real
+            # credentials from a developer's ~/.netrc would be resolved and
+            # the 401 would be reported as "Invalid credentials" instead.
+            async with GerritKeysClient(
+                server="gerrit.onap.org", use_netrc=False
+            ) as client:
                 success, error = await client.verify_connection()
                 assert success is False
                 assert error == (
