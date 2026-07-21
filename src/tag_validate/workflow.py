@@ -1651,9 +1651,9 @@ class ValidationWorkflow:
     ) -> ValidationResult:
         """Clone a remote tag and validate it in a temporary checkout.
 
-        The temporary directory is always removed and the repo context is
-        cleared once validation completes. The repository path is restored
-        only on success, matching the original control flow.
+        The repository path, detector, temporary directory, and repo
+        context are always restored/cleaned up once validation completes,
+        regardless of whether validation succeeds or raises.
 
         Args:
             owner: Repository owner
@@ -1672,9 +1672,10 @@ class ValidationWorkflow:
             tag=tag,
             token=request.github_token,
         )
+        # Capture before the try so the finally can always restore it
+        original_repo_path = self.repo_path
         try:
             # Update repo path and detector
-            original_repo_path = self.repo_path
             self.repo_path = temp_dir
             self.detector = SignatureDetector(temp_dir)
 
@@ -1685,18 +1686,18 @@ class ValidationWorkflow:
             self._current_repo_context = (owner, repo)
 
             # Validate the tag
-            result = await self.validate_tag(
+            return await self.validate_tag(
                 tag,
                 request.github_user,
                 request.github_token,
                 request.require_owners,
             )
-
-            # Restore original repo path
+        finally:
+            # Always restore the original repo path/detector so a failed
+            # validation does not leave the instance pointing at the
+            # now-deleted temporary checkout
             self.repo_path = original_repo_path
             self.detector = SignatureDetector(original_repo_path)
-            return result
-        finally:
             # Clean up temporary directory
             secure_rmtree(temp_dir)
             logger.debug(f"Cleaned up temporary directory: {temp_dir}")
