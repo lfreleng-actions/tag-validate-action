@@ -23,8 +23,8 @@ import pytest
 from typer.testing import CliRunner
 
 from tag_validate.cli import app
-from tag_validate.gerrit_keys import GerritAccountInfo, GerritKeysError
-from tag_validate.models import KeyVerificationResult
+from tag_validate.gerrit_keys import GerritKeysError
+from tag_validate.models import GerritAccountInfo, KeyVerificationResult
 
 # Test data
 SAMPLE_GPG_KEY_ID = "FCE8AAABF53080F6"
@@ -58,7 +58,7 @@ def mock_verification_success():
     return KeyVerificationResult(
         key_registered=True,
         username=SAMPLE_USERNAME,
-        enumerated=False,
+        user_enumerated=False,
         server=SAMPLE_SERVER,
         service="gerrit",
         user_name="John Doe",
@@ -72,7 +72,7 @@ def mock_verification_failure():
     return KeyVerificationResult(
         key_registered=False,
         username=SAMPLE_USERNAME,
-        enumerated=False,
+        user_enumerated=False,
         server=SAMPLE_SERVER,
         service="gerrit",
         user_name="John Doe",

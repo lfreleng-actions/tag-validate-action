@@ -34,6 +34,7 @@ Typical usage:
 import logging
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .display_utils import format_server_display, format_user_details
@@ -57,6 +58,19 @@ from .tag_operations import TagOperations
 from .validation import TagValidator
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _TagLocationRequest:
+    """Bundled verification options for tag-location validation helpers.
+
+    Groups the user/token/owner parameters that are threaded together
+    through the internal tag-location validation helpers.
+    """
+
+    github_user: str | None = None
+    github_token: str | None = None
+    require_owners: list[str] | None = None
 
 
 class ValidationWorkflow:
@@ -201,297 +215,38 @@ class ValidationWorkflow:
             logger.error(f"Tag info fetch failed: {e}")
             return result
 
-        # Step 2: Detect version type (always runs - nearly zero cost)
-        # Type detection is always performed regardless of skip_version_validation
-        # This provides valuable information and has negligible performance impact
-        if not self.config.skip_version_validation:
-            version_result = self._validate_version(tag_name)
-            result.version_info = version_result
+        # Step 2: Detect and enforce version type
+        if not self._run_version_step(result, tag_name):
+            return result
 
-
-
-            # Only enforce type requirements if explicitly configured
-            if (
-                self.config.require_semver or self.config.require_calver
-            ) and not self._check_version_requirements(version_result):
-                result.is_valid = False
-                # Add specific error message about version type mismatch
-                required_types = []
-                if self.config.require_semver:
-                    required_types.append("semver")
-                if self.config.require_calver:
-                    required_types.append("calver")
-                result.add_error(
-                    f"Version type '{version_result.version_type}' does not match required type(s): {', '.join(required_types)}"
-                )
-                return result
-            # Otherwise accept any type (including "other")
-        else:
-            # Skip version validation entirely (legacy flag support)
-            result.add_info("Version validation skipped (--skip-version-validation)")
-
-        # Step 2b: Enforce version increment (if requested)
-        if self.config.enforce_increment:
-            increment_ok = await self._check_increment(
-                tag_name, result, github_token
-            )
-            if not increment_ok:
-                result.is_valid = False
-                return result
-
-        # Step 2c: Require tag commit on a specific branch (if requested)
-        if self.config.require_branch:
-            branch_ok = await self._check_branch(
-                tag_name, tag_info, result, github_token
-            )
-            if not branch_ok:
-                result.is_valid = False
-                return result
-
-        # Step 2d: Require the tag to be recently created (if requested)
-        if self.config.max_tag_age_minutes is not None:
-            age_ok = self._check_tag_age(tag_name, tag_info, result)
-            if not age_ok:
-                result.is_valid = False
-                return result
-
-        # Step 2e: Require the tag to be the branch tip (if requested)
-        if self.config.require_latest:
-            latest_ok = await self._check_latest(
-                tag_name, tag_info, result, github_token
-            )
-            if not latest_ok:
-                result.is_valid = False
-                return result
+        # Steps 2b-2e: Increment, branch, age, and latest gates
+        if not await self._run_gate_checks(
+            tag_name, tag_info, result, github_token
+        ):
+            return result
 
         # Step 3: Detect and validate signature
-        try:
-            signature_info = await self._detect_signature(tag_name, tag_info)
-            result.signature_info = signature_info
-
-            if not self._check_signature_requirements(signature_info, result):
-                result.is_valid = False
-                return result
-
-        except Exception as e:
-            result.is_valid = False
-            result.add_error(f"Signature detection failed: {e}")
-            logger.error(f"Signature detection failed: {e}")
+        signature_info = await self._run_signature_step(
+            result, tag_name, tag_info
+        )
+        if signature_info is None:
             return result
 
         # Step 4: Verify key on GitHub (if requested and signature exists)
         if self.config.require_github:
-            if signature_info.type in ["gpg", "ssh"] and signature_info.verified:
-                # Check if token is available first
-                if not github_token:
-                    result.is_valid = False
-                    error_msg = "GitHub token is required. Set GITHUB_TOKEN environment variable or pass --token"
-                    result.add_error(error_msg)
-                    logger.error(error_msg)
-                else:
-                    # Auto-detect GitHub username from tagger email if not provided
-                    detected_user = github_user
-                    was_user_enumerated = False
-                    if not detected_user and signature_info.signer_email:
-                        logger.debug(f"Attempting to auto-detect GitHub username from email: {signature_info.signer_email}")
-                        try:
-                            from .github_keys import GitHubKeysClient
-                            async with GitHubKeysClient(token=github_token) as client:
-                                detected_user = await client.lookup_username_by_email(signature_info.signer_email)
-                                if detected_user:
-                                    was_user_enumerated = True
-                                    logger.debug(f"Auto-detected GitHub username: {detected_user}")
-                                    # User info is already shown in GitHub User section
-                                else:
-                                    logger.warning(f"Could not auto-detect GitHub username from email: {signature_info.signer_email}")
-                        except Exception as e:
-                            logger.debug(f"Failed to auto-detect GitHub username: {e}")
-
-                    # Use require_owners if provided, otherwise use detected_user
-                    if require_owners:
-                        # Verify against required owners
-                        try:
-                            key_result = await self._require_github_key(
-                                signature_info,
-                                detected_user if detected_user else "",  # Not used when require_owners is set
-                                github_token,
-                                require_owners,
-                            )
-                            result.key_verifications.append(key_result)
-
-                            if not key_result.key_registered:
-                                result.is_valid = False
-                                result.add_error(
-                                    f"Signing key not registered to any of the required owners: {', '.join(require_owners)}"
-                                )
-                        except Exception as e:
-                            result.is_valid = False
-                            result.add_error(f"GitHub key verification failed: {e}")
-                            logger.error(f"GitHub key verification failed: {e}")
-                    elif detected_user:
-                        try:
-                            key_result = await self._require_github_key(
-                                signature_info,
-                                detected_user,
-                                github_token,
-                                require_owners,
-                            )
-                            # Set user_enumerated flag if username was auto-detected
-                            if was_user_enumerated and key_result:
-                                key_result.user_enumerated = True
-                            result.key_verifications.append(key_result)
-
-                            if not key_result.key_registered:
-                                result.is_valid = False
-                                result.add_error(
-                                    f"Signing key not registered to GitHub user @{detected_user}"
-                                )
-                        except Exception as e:
-                            result.is_valid = False
-                            result.add_error(f"GitHub key verification failed: {e}")
-                            logger.error(f"GitHub key verification failed: {e}")
-                    else:
-                        result.is_valid = False
-                        error_msg = "GitHub key verification requested but no username provided or detected from tagger email"
-                        result.add_error(error_msg)
-                        logger.error(error_msg)
-            else:
-                result.add_info("Skipping GitHub key verification (no valid signature)")
+            await self._verify_github_key_step(
+                result,
+                signature_info,
+                github_user,
+                github_token,
+                require_owners,
+            )
 
         # Step 5: Verify key on Gerrit (if requested and signature exists)
         if self.config.require_gerrit:
-            if signature_info.type in ["gpg", "ssh"] and signature_info.verified:
-                try:
-                    # Determine Gerrit server
-                    gerrit_server = self.config.gerrit_server
-                    github_org = None
-
-                    if not gerrit_server:
-                        # Try to extract GitHub org from current context
-                        github_org = self._extract_github_org_from_context()
-                        if github_org:
-                            gerrit_server = f"gerrit.{github_org}.org"
-                        else:
-                            raise ValueError("No Gerrit server specified and could not auto-detect from GitHub org")
-
-                    # Verify connection and authentication BEFORE attempting key verification
-                    # This provides clear error messages for auth issues
-                    async with GerritKeysClient(
-                        server=gerrit_server,
-                        username=self.gerrit_username,
-                        password=self.gerrit_password,
-                        use_netrc=self.use_netrc,
-                        netrc_file=self.netrc_file,
-                    ) as test_client:
-                        connection_ok, connection_error = await test_client.verify_connection()
-                        if not connection_ok:
-                            # Connection/auth failed - mark invalid and raise to skip key verification
-                            result.is_valid = False
-
-                            # Handle case where connection_error might be None
-                            error_msg = connection_error or "Unknown connection error"
-                            logger.error(f"Gerrit connection failed: {error_msg}")
-
-                            # Determine if this is a credentials issue based on the error message
-                            error_lower = error_msg.lower()
-                            if "credentials required" in error_lower:
-                                # No credentials provided
-                                raise GerritMissingCredentialsError(error_msg)
-                            elif "invalid credentials" in error_lower or "rejected the provided credentials" in error_lower:
-                                # Credentials provided but invalid
-                                raise GerritInvalidCredentialsError(error_msg)
-                            else:
-                                # Other connection/server errors
-                                raise GerritServerError(error_msg)
-
-                    # Use require_owners if provided, otherwise verify against tagger email
-                    key_result = await self._require_gerrit_key(
-                        signature_info,
-                        gerrit_server,
-                        github_org,
-                        require_owners,
-                    )
-
-                    # Add Gerrit verification to the list
-                    result.key_verifications.append(key_result)
-
-                    if not key_result.key_registered:
-                        result.is_valid = False
-                        if require_owners:
-                            result.add_error(
-                                f"Signing key not registered to any of the required owners on Gerrit: {', '.join(require_owners)}"
-                            )
-                        else:
-                            result.add_error(f"Signing key not registered on Gerrit server {key_result.server}")
-
-
-                except GerritMissingCredentialsError as e:
-                    # Credentials required but not provided
-                    error_msg = str(e)
-                    logger.warning(f"Gerrit key verification unavailable: Missing credentials - {e}")
-                    result.is_valid = False
-                    result.add_error(
-                        f"Gerrit key verification required but credentials not provided: {error_msg}"
-                    )
-                    result.add_error(
-                        "Please provide Gerrit credentials via GERRIT_USERNAME and GERRIT_PASSWORD environment variables."
-                    )
-
-                except GerritInvalidCredentialsError as e:
-                    # Credentials provided but invalid
-                    error_msg = str(e)
-                    logger.warning(f"Gerrit key verification unavailable: Invalid credentials - {e}")
-                    result.is_valid = False
-                    result.add_error(
-                        f"Gerrit key verification required but authentication failed: {error_msg}"
-                    )
-                    result.add_error(
-                        "Please verify your Gerrit username and HTTP password are correct. "
-                        "Note: Use HTTP password from Gerrit Settings > HTTP Credentials, not your SSO/LDAP password."
-                    )
-
-                except GerritServerError as e:
-                    # Other server errors (connection issues, endpoint not available, etc.)
-                    error_msg = str(e)
-                    logger.warning(f"Gerrit key verification unavailable: {e}")
-
-                    # Determine error type from message content
-                    lower_msg = error_msg.lower()
-                    is_endpoint_error = (
-                        "endpoint not available" in lower_msg or
-                        "may not support" in lower_msg
-                    )
-
-                    # When --require-gerrit is specified, verification MUST succeed
-                    # Any server limitation means the requirement cannot be satisfied
-                    result.is_valid = False
-
-                    # Add appropriate error message based on the failure type
-                    if is_endpoint_error:
-                        # Endpoint not available
-                        result.add_error(
-                            f"Gerrit key verification required but unavailable: {error_msg}"
-                        )
-                        result.add_error(
-                            f"Gerrit server '{gerrit_server}' does not expose key management APIs. "
-                            "This server cannot be used for --require-gerrit verification."
-                        )
-                    else:
-                        # Other errors
-                        result.add_error(
-                            f"Gerrit key verification required but unavailable: {error_msg}"
-                        )
-                except Exception as e:
-                    result.is_valid = False
-                    result.add_error(f"Gerrit key verification failed: {e}")
-                    logger.error(f"Gerrit key verification failed: {e}")
-            else:
-                # When --require-gerrit is specified, a valid signature is REQUIRED
-                result.is_valid = False
-                result.add_error(
-                    "Gerrit key verification required but tag has no valid signature. "
-                    "Tag must be signed with GPG or SSH to verify key on Gerrit."
-                )
+            await self._verify_gerrit_key_step(
+                result, signature_info, require_owners
+            )
 
         # Final validation summary
         if result.is_valid:
@@ -500,6 +255,475 @@ class ValidationWorkflow:
             logger.warning(f"❌ Tag validation failed: {tag_name}")
 
         return result
+
+    def _run_version_step(
+        self, result: ValidationResult, tag_name: str
+    ) -> bool:
+        """Detect the version type and enforce type requirements.
+
+        Args:
+            result: Validation result to update
+            tag_name: Name of the tag being validated
+
+        Returns:
+            True to continue validation, False if a requirement failed and
+            the caller should stop (result already updated).
+        """
+        if self.config.skip_version_validation:
+            # Skip version validation entirely (legacy flag support)
+            result.add_info(
+                "Version validation skipped (--skip-version-validation)"
+            )
+            return True
+
+        version_result = self._validate_version(tag_name)
+        result.version_info = version_result
+
+        # Only enforce type requirements if explicitly configured
+        if (
+            self.config.require_semver or self.config.require_calver
+        ) and not self._check_version_requirements(version_result):
+            result.is_valid = False
+            required_types = []
+            if self.config.require_semver:
+                required_types.append("semver")
+            if self.config.require_calver:
+                required_types.append("calver")
+            result.add_error(
+                f"Version type '{version_result.version_type}' does not "
+                f"match required type(s): {', '.join(required_types)}"
+            )
+            return False
+        # Otherwise accept any type (including "other")
+        return True
+
+    async def _run_gate_checks(
+        self,
+        tag_name: str,
+        tag_info: TagInfo,
+        result: ValidationResult,
+        github_token: str | None,
+    ) -> bool:
+        """Run increment, branch, age, and latest-commit gates.
+
+        Args:
+            tag_name: Name of the tag being validated
+            tag_info: Fetched tag information
+            result: Validation result to update
+            github_token: GitHub API token (optional)
+
+        Returns:
+            True to continue validation, False if a gate failed and the
+            caller should stop (result already updated).
+        """
+        # Step 2b: Enforce version increment (if requested)
+        if self.config.enforce_increment and not await self._check_increment(
+            tag_name, result, github_token
+        ):
+            result.is_valid = False
+            return False
+
+        # Step 2c: Require tag commit on a specific branch (if requested)
+        if self.config.require_branch and not await self._check_branch(
+            tag_name, tag_info, result, github_token
+        ):
+            result.is_valid = False
+            return False
+
+        # Step 2d: Require the tag to be recently created (if requested)
+        if (
+            self.config.max_tag_age_minutes is not None
+            and not self._check_tag_age(tag_name, tag_info, result)
+        ):
+            result.is_valid = False
+            return False
+
+        # Step 2e: Require the tag to be the branch tip (if requested)
+        if self.config.require_latest and not await self._check_latest(
+            tag_name, tag_info, result, github_token
+        ):
+            result.is_valid = False
+            return False
+
+        return True
+
+    async def _run_signature_step(
+        self,
+        result: ValidationResult,
+        tag_name: str,
+        tag_info: TagInfo,
+    ) -> SignatureInfo | None:
+        """Detect and validate the tag signature.
+
+        Args:
+            result: Validation result to update
+            tag_name: Name of the tag being validated
+            tag_info: Fetched tag information
+
+        Returns:
+            The detected SignatureInfo when validation should continue, or
+            None if the caller should stop (result already updated).
+        """
+        try:
+            signature_info = await self._detect_signature(tag_name, tag_info)
+            result.signature_info = signature_info
+
+            if not self._check_signature_requirements(signature_info, result):
+                result.is_valid = False
+                return None
+        except Exception as e:
+            result.is_valid = False
+            result.add_error(f"Signature detection failed: {e}")
+            logger.error(f"Signature detection failed: {e}")
+            return None
+        return signature_info
+
+    async def _detect_github_user(
+        self,
+        signature_info: SignatureInfo,
+        github_user: str | None,
+        github_token: str | None,
+    ) -> tuple[str | None, bool]:
+        """Resolve the GitHub username, auto-detecting from signer email.
+
+        Args:
+            signature_info: Signature information
+            github_user: Explicitly provided GitHub username (optional)
+            github_token: GitHub API token (optional)
+
+        Returns:
+            Tuple of (username or None, whether it was auto-enumerated).
+        """
+        if github_user or not signature_info.signer_email:
+            return github_user, False
+
+        logger.debug(
+            f"Attempting to auto-detect GitHub username from email: "
+            f"{signature_info.signer_email}"
+        )
+        try:
+            from .github_keys import GitHubKeysClient
+            async with GitHubKeysClient(token=github_token) as client:
+                detected = await client.lookup_username_by_email(
+                    signature_info.signer_email
+                )
+                if detected:
+                    logger.debug(f"Auto-detected GitHub username: {detected}")
+                    return detected, True
+                logger.warning(
+                    f"Could not auto-detect GitHub username from email: "
+                    f"{signature_info.signer_email}"
+                )
+        except Exception as e:
+            logger.debug(f"Failed to auto-detect GitHub username: {e}")
+        return None, False
+
+    async def _verify_github_key_step(
+        self,
+        result: ValidationResult,
+        signature_info: SignatureInfo,
+        github_user: str | None,
+        github_token: str | None,
+        require_owners: list[str] | None,
+    ) -> None:
+        """Verify the signing key against GitHub (Step 4).
+
+        Args:
+            result: Validation result to update
+            signature_info: Signature information
+            github_user: GitHub username for key verification (optional)
+            github_token: GitHub API token (optional)
+            require_owners: Required owners the key must belong to (optional)
+        """
+        if not (
+            signature_info.type in ["gpg", "ssh"] and signature_info.verified
+        ):
+            result.add_info(
+                "Skipping GitHub key verification (no valid signature)"
+            )
+            return
+
+        if not github_token:
+            result.is_valid = False
+            error_msg = (
+                "GitHub token is required. Set GITHUB_TOKEN environment "
+                "variable or pass --token"
+            )
+            result.add_error(error_msg)
+            logger.error(error_msg)
+            return
+
+        detected_user, was_user_enumerated = await self._detect_github_user(
+            signature_info, github_user, github_token
+        )
+
+        if require_owners:
+            await self._verify_github_owners(
+                result, signature_info, detected_user, github_token,
+                require_owners,
+            )
+        elif detected_user:
+            await self._verify_github_single_user(
+                result, signature_info, detected_user, github_token,
+                was_user_enumerated,
+            )
+        else:
+            result.is_valid = False
+            error_msg = (
+                "GitHub key verification requested but no username provided "
+                "or detected from tagger email"
+            )
+            result.add_error(error_msg)
+            logger.error(error_msg)
+
+    async def _verify_github_owners(
+        self,
+        result: ValidationResult,
+        signature_info: SignatureInfo,
+        detected_user: str | None,
+        github_token: str | None,
+        require_owners: list[str],
+    ) -> None:
+        """Verify the signing key against a set of required owners.
+
+        Args:
+            result: Validation result to update
+            signature_info: Signature information
+            detected_user: Detected GitHub username (unused for owners)
+            github_token: GitHub API token (optional)
+            require_owners: Required owners the key must belong to
+        """
+        try:
+            key_result = await self._require_github_key(
+                signature_info,
+                detected_user if detected_user else "",
+                github_token,
+                require_owners,
+            )
+            result.key_verifications.append(key_result)
+            if not key_result.key_registered:
+                result.is_valid = False
+                result.add_error(
+                    f"Signing key not registered to any of the required "
+                    f"owners: {', '.join(require_owners)}"
+                )
+        except Exception as e:
+            result.is_valid = False
+            result.add_error(f"GitHub key verification failed: {e}")
+            logger.error(f"GitHub key verification failed: {e}")
+
+    async def _verify_github_single_user(
+        self,
+        result: ValidationResult,
+        signature_info: SignatureInfo,
+        detected_user: str,
+        github_token: str | None,
+        was_user_enumerated: bool,
+    ) -> None:
+        """Verify the signing key against a single GitHub user.
+
+        Args:
+            result: Validation result to update
+            signature_info: Signature information
+            detected_user: GitHub username to verify against
+            github_token: GitHub API token (optional)
+            was_user_enumerated: Whether the username was auto-detected
+        """
+        try:
+            key_result = await self._require_github_key(
+                signature_info,
+                detected_user,
+                github_token,
+                None,
+            )
+            # Set user_enumerated flag if username was auto-detected
+            if was_user_enumerated and key_result:
+                key_result.user_enumerated = True
+            result.key_verifications.append(key_result)
+            if not key_result.key_registered:
+                result.is_valid = False
+                result.add_error(
+                    f"Signing key not registered to GitHub user "
+                    f"@{detected_user}"
+                )
+        except Exception as e:
+            result.is_valid = False
+            result.add_error(f"GitHub key verification failed: {e}")
+            logger.error(f"GitHub key verification failed: {e}")
+
+    async def _verify_gerrit_connection(
+        self,
+        result: ValidationResult,
+        gerrit_server: str,
+    ) -> None:
+        """Verify Gerrit connectivity and authentication.
+
+        Args:
+            result: Validation result to update on failure
+            gerrit_server: Resolved Gerrit server hostname
+
+        Raises:
+            GerritMissingCredentialsError: Credentials required but absent
+            GerritInvalidCredentialsError: Credentials provided but invalid
+            GerritServerError: Other connection or server errors
+        """
+        async with GerritKeysClient(
+            server=gerrit_server,
+            username=self.gerrit_username,
+            password=self.gerrit_password,
+            use_netrc=self.use_netrc,
+            netrc_file=self.netrc_file,
+        ) as test_client:
+            connection_ok, connection_error = await test_client.verify_connection()
+            if connection_ok:
+                return
+            # Connection/auth failed - mark invalid and raise to skip
+            # key verification
+            result.is_valid = False
+            error_msg = connection_error or "Unknown connection error"
+            logger.error(f"Gerrit connection failed: {error_msg}")
+            error_lower = error_msg.lower()
+            if "credentials required" in error_lower:
+                raise GerritMissingCredentialsError(error_msg)
+            if (
+                "invalid credentials" in error_lower
+                or "rejected the provided credentials" in error_lower
+            ):
+                raise GerritInvalidCredentialsError(error_msg)
+            raise GerritServerError(error_msg)
+
+    def _handle_gerrit_server_error(
+        self,
+        result: ValidationResult,
+        error_msg: str,
+        gerrit_server: str | None,
+    ) -> None:
+        """Record result errors for a Gerrit server/connection failure.
+
+        Args:
+            result: Validation result to update
+            error_msg: Error message from the raised GerritServerError
+            gerrit_server: Resolved Gerrit server hostname (may be None)
+        """
+        lower_msg = error_msg.lower()
+        is_endpoint_error = (
+            "endpoint not available" in lower_msg
+            or "may not support" in lower_msg
+        )
+        # When --require-gerrit is specified, verification MUST succeed
+        # Any server limitation means the requirement cannot be satisfied
+        result.is_valid = False
+        result.add_error(
+            f"Gerrit key verification required but unavailable: {error_msg}"
+        )
+        if is_endpoint_error:
+            result.add_error(
+                f"Gerrit server '{gerrit_server}' does not expose key "
+                "management APIs. This server cannot be used for "
+                "--require-gerrit verification."
+            )
+
+    async def _verify_gerrit_key_step(
+        self,
+        result: ValidationResult,
+        signature_info: SignatureInfo,
+        require_owners: list[str] | None,
+    ) -> None:
+        """Verify the signing key against Gerrit (Step 5).
+
+        Args:
+            result: Validation result to update
+            signature_info: Signature information
+            require_owners: Required owners the key must belong to (optional)
+        """
+        if not (
+            signature_info.type in ["gpg", "ssh"] and signature_info.verified
+        ):
+            # When --require-gerrit is specified, a valid signature is REQUIRED
+            result.is_valid = False
+            result.add_error(
+                "Gerrit key verification required but tag has no valid "
+                "signature. Tag must be signed with GPG or SSH to verify "
+                "key on Gerrit."
+            )
+            return
+
+        # Determine Gerrit server (bound before the try so except handlers
+        # can safely reference it)
+        gerrit_server = self.config.gerrit_server
+        try:
+            github_org = None
+            if not gerrit_server:
+                # Try to extract GitHub org from current context
+                github_org = self._extract_github_org_from_context()
+                if github_org:
+                    gerrit_server = f"gerrit.{github_org}.org"
+                else:
+                    raise ValueError(
+                        "No Gerrit server specified and could not "
+                        "auto-detect from GitHub org"
+                    )
+
+            # Verify connection/auth before attempting key verification
+            await self._verify_gerrit_connection(result, gerrit_server)
+
+            # Use require_owners if provided, else verify against tagger email
+            key_result = await self._require_gerrit_key(
+                signature_info, gerrit_server, github_org, require_owners
+            )
+            result.key_verifications.append(key_result)
+            if not key_result.key_registered:
+                result.is_valid = False
+                if require_owners:
+                    result.add_error(
+                        f"Signing key not registered to any of the required "
+                        f"owners on Gerrit: {', '.join(require_owners)}"
+                    )
+                else:
+                    result.add_error(
+                        f"Signing key not registered on Gerrit server "
+                        f"{key_result.server}"
+                    )
+
+        except GerritMissingCredentialsError as e:
+            error_msg = str(e)
+            logger.warning(
+                f"Gerrit key verification unavailable: Missing credentials "
+                f"- {e}"
+            )
+            result.is_valid = False
+            result.add_error(
+                f"Gerrit key verification required but credentials not "
+                f"provided: {error_msg}"
+            )
+            result.add_error(
+                "Please provide Gerrit credentials via GERRIT_USERNAME and "
+                "GERRIT_PASSWORD environment variables."
+            )
+        except GerritInvalidCredentialsError as e:
+            error_msg = str(e)
+            logger.warning(
+                f"Gerrit key verification unavailable: Invalid credentials "
+                f"- {e}"
+            )
+            result.is_valid = False
+            result.add_error(
+                f"Gerrit key verification required but authentication "
+                f"failed: {error_msg}"
+            )
+            result.add_error(
+                "Please verify your Gerrit username and HTTP password are "
+                "correct. Note: Use HTTP password from Gerrit Settings > "
+                "HTTP Credentials, not your SSO/LDAP password."
+            )
+        except GerritServerError as e:
+            error_msg = str(e)
+            logger.warning(f"Gerrit key verification unavailable: {e}")
+            self._handle_gerrit_server_error(result, error_msg, gerrit_server)
+        except Exception as e:
+            result.is_valid = False
+            result.add_error(f"Gerrit key verification failed: {e}")
+            logger.error(f"Gerrit key verification failed: {e}")
 
     async def _fetch_tag_info(self, tag_name: str) -> TagInfo:
         """Fetch tag information from the repository.
@@ -1013,6 +1237,101 @@ class ValidationWorkflow:
         # Signature info is already shown in dedicated section
         return True
 
+    async def _verify_key_for_username(
+        self,
+        client: GitHubKeysClient,
+        signature_info: SignatureInfo,
+        username: str,
+    ) -> KeyVerificationResult:
+        """Verify the signing key is registered to a specific GitHub user.
+
+        Args:
+            client: Open GitHub keys client
+            signature_info: Signature information
+            username: GitHub username to verify against
+
+        Returns:
+            KeyVerificationResult: Key verification result
+
+        Raises:
+            ValueError: If the signature lacks required data or has an
+                unsupported type
+        """
+        if signature_info.type == "gpg":
+            if not signature_info.key_id:
+                raise ValueError("GPG key ID not found in signature")
+            return await client.verify_gpg_key_registered(
+                username=username,
+                key_id=signature_info.key_id,
+                tagger_email=signature_info.signer_email,
+                signer_email=signature_info.signer_email,
+            )
+        if signature_info.type == "ssh":
+            if not signature_info.fingerprint:
+                raise ValueError("SSH fingerprint not found in signature")
+            return await client.verify_ssh_key_registered(
+                username=username,
+                public_key_fingerprint=signature_info.fingerprint,
+                signer_email=signature_info.signer_email,
+            )
+        raise ValueError(f"Cannot verify {signature_info.type} signature type")
+
+    async def _match_owner_key(
+        self,
+        client: GitHubKeysClient,
+        signature_info: SignatureInfo,
+        owner: str,
+    ) -> KeyVerificationResult | None:
+        """Check whether the signing key is registered to one owner.
+
+        Args:
+            client: Open GitHub keys client
+            signature_info: Signature information
+            owner: Required owner as a GitHub username or email address
+
+        Returns:
+            KeyVerificationResult if the key is registered to this owner,
+            otherwise None (owner did not match or verification failed)
+        """
+        if "@" in owner:
+            logger.debug(f"Checking if signer email matches: {owner}")
+            if not (
+                signature_info.signer_email
+                and signature_info.signer_email.lower() == owner.lower()
+            ):
+                logger.debug(
+                    f"Signer email {signature_info.signer_email} does not "
+                    f"match required owner {owner}"
+                )
+                return None
+            try:
+                username = await client.lookup_username_by_email(owner)
+                if username:
+                    logger.debug(
+                        f"Found GitHub username for email {owner}: {username}"
+                    )
+                    result = await self._verify_key_for_username(
+                        client, signature_info, username
+                    )
+                    if result.key_registered:
+                        logger.debug(f"Key verified for owner email: {owner}")
+                        return result
+            except Exception as e:
+                logger.debug(f"Could not verify email {owner}: {e}")
+            return None
+
+        logger.debug(f"Verifying key for GitHub username: {owner}")
+        try:
+            result = await self._verify_key_for_username(
+                client, signature_info, owner
+            )
+            if result.key_registered:
+                logger.debug(f"Key verified for owner: {owner}")
+                return result
+        except Exception as e:
+            logger.debug(f"Could not verify username {owner}: {e}")
+        return None
+
     async def _require_github_key(
         self,
         signature_info: SignatureInfo,
@@ -1040,76 +1359,11 @@ class ValidationWorkflow:
 
             async with GitHubKeysClient(token=github_token) as client:
                 for owner in require_owners:
-                    # Check if owner is an email address
-                    if "@" in owner:
-                        logger.debug(f"Checking if signer email matches: {owner}")
-                        # For email, check if it matches the signer's email
-                        if signature_info.signer_email and signature_info.signer_email.lower() == owner.lower():
-                            # Email matches, now verify the key is registered to a GitHub account with this email
-                            # We need to look up the username by email
-                            try:
-                                username = await client.lookup_username_by_email(owner)
-                                if username:
-                                    logger.debug(f"Found GitHub username for email {owner}: {username}")
-                                    # Now verify the key is registered to this user
-                                    if signature_info.type == "gpg":
-                                        if not signature_info.key_id:
-                                            raise ValueError("GPG key ID not found in signature")
-                                        result = await client.verify_gpg_key_registered(
-                                            username=username,
-                                            key_id=signature_info.key_id,
-                                            tagger_email=signature_info.signer_email,
-                                            signer_email=signature_info.signer_email,
-                                        )
-                                    elif signature_info.type == "ssh":
-                                        if not signature_info.fingerprint:
-                                            raise ValueError("SSH fingerprint not found in signature")
-                                        result = await client.verify_ssh_key_registered(
-                                            username=username,
-                                            public_key_fingerprint=signature_info.fingerprint,
-                                            signer_email=signature_info.signer_email,
-                                        )
-                                    else:
-                                        raise ValueError(f"Cannot verify {signature_info.type} signature type")
-
-                                    if result.key_registered:
-                                        logger.debug(f"Key verified for owner email: {owner}")
-                                        return result
-                            except Exception as e:
-                                logger.debug(f"Could not verify email {owner}: {e}")
-                                continue
-                        else:
-                            logger.debug(f"Signer email {signature_info.signer_email} does not match required owner {owner}")
-                    else:
-                        # Owner is a username
-                        logger.debug(f"Verifying key for GitHub username: {owner}")
-                        try:
-                            if signature_info.type == "gpg":
-                                if not signature_info.key_id:
-                                    raise ValueError("GPG key ID not found in signature")
-                                result = await client.verify_gpg_key_registered(
-                                    username=owner,
-                                    key_id=signature_info.key_id,
-                                    tagger_email=signature_info.signer_email,
-                                    signer_email=signature_info.signer_email,
-                                )
-                            elif signature_info.type == "ssh":
-                                if not signature_info.fingerprint:
-                                    raise ValueError("SSH fingerprint not found in signature")
-                                result = await client.verify_ssh_key_registered(
-                                    username=owner,
-                                    public_key_fingerprint=signature_info.fingerprint,
-                                    signer_email=signature_info.signer_email,
-                                )
-                            else:
-                                raise ValueError(f"Cannot verify {signature_info.type} signature type")
-
-                            if result.key_registered:
-                                logger.debug(f"Key verified for owner: {owner}")
-                                return result
-                        except Exception as e:
-                            logger.debug(f"Could not verify username {owner}: {e}")
-                            continue
+                    match = await self._match_owner_key(
+                        client, signature_info, owner
+                    )
+                    if match is not None:
+                        return match
 
                 # If we get here, none of the owners matched
                 logger.debug(f"Key not registered to any of the required owners: {require_owners}")
@@ -1122,37 +1376,17 @@ class ValidationWorkflow:
                     server="github.com",
                     user_email=signature_info.signer_email,
                 )
-        else:
-            # Original behavior: verify against single github_user
-            logger.debug(f"Verifying key on GitHub for user: {github_user}")
 
-            async with GitHubKeysClient(token=github_token) as client:
-                if signature_info.type == "gpg":
-                    if not signature_info.key_id:
-                        raise ValueError("GPG key ID not found in signature")
+        # Original behavior: verify against single github_user
+        logger.debug(f"Verifying key on GitHub for user: {github_user}")
 
-                    result = await client.verify_gpg_key_registered(
-                        username=github_user,
-                        key_id=signature_info.key_id,
-                        tagger_email=signature_info.signer_email,
-                        signer_email=signature_info.signer_email,
-                    )
+        async with GitHubKeysClient(token=github_token) as client:
+            result = await self._verify_key_for_username(
+                client, signature_info, github_user
+            )
 
-                elif signature_info.type == "ssh":
-                    if not signature_info.fingerprint:
-                        raise ValueError("SSH fingerprint not found in signature")
-
-                    result = await client.verify_ssh_key_registered(
-                        username=github_user,
-                        public_key_fingerprint=signature_info.fingerprint,
-                        signer_email=signature_info.signer_email,
-                    )
-
-                else:
-                    raise ValueError(f"Cannot verify {signature_info.type} signature type")
-
-            logger.debug(f"Key verification result: registered={result.key_registered}")
-            return result
+        logger.debug(f"Key verification result: registered={result.key_registered}")
+        return result
 
     async def _require_gerrit_key(
         self,
@@ -1358,6 +1592,11 @@ class ValidationWorkflow:
             ValidationResult: Complete validation result
         """
         logger.debug(f"Validating tag location: {tag_location}")
+        request = _TagLocationRequest(
+            github_user=github_user,
+            github_token=github_token,
+            require_owners=require_owners,
+        )
 
         # Check if it's a remote location or local tag
         from urllib.parse import urlparse
@@ -1367,206 +1606,274 @@ class ValidationWorkflow:
         )
         if "@" in tag_location and ("/" in tag_location or is_github_host):
             # Definite remote tag - parse and clone
-            try:
-                owner, repo, tag = self.operations.parse_tag_location(tag_location)
-                logger.debug(f"Parsed location: {owner}/{repo}@{tag}")
+            return await self._validate_definite_remote(tag_location, request)
+        if "/" in tag_location:
+            # Ambiguous: local path or remote; try local first
+            return await self._validate_ambiguous_tag_location(
+                tag_location, request
+            )
+        # No slash or @ - treat as local tag name in current repo
+        return await self.validate_tag(
+            tag_location, github_user, github_token, require_owners
+        )
 
-                # Clone the repository
-                from dependamerge.git_ops import secure_rmtree
-                temp_dir, tag_info = await self.operations.clone_remote_tag(
-                    owner=owner,
-                    repo=repo,
-                    tag=tag,
-                    token=github_token,
+    def _failed_result(
+        self, tag_name: str, error_msg: str
+    ) -> ValidationResult:
+        """Build a failed ValidationResult with a single error message.
+
+        Args:
+            tag_name: Tag name or location that failed validation
+            error_msg: Error message to record
+
+        Returns:
+            ValidationResult: A result marked invalid with the error added.
+        """
+        result = ValidationResult(
+            tag_name=tag_name,
+            is_valid=False,
+            config=self.config,
+            tag_info=None,
+            version_info=None,
+            signature_info=None,
+        )
+        result.add_error(error_msg)
+        return result
+
+    async def _clone_and_validate(
+        self,
+        owner: str,
+        repo: str,
+        tag: str,
+        request: _TagLocationRequest,
+        *,
+        set_org: bool,
+    ) -> ValidationResult:
+        """Clone a remote tag and validate it in a temporary checkout.
+
+        The repository path, detector, temporary directory, and repo
+        context are always restored/cleaned up once validation completes,
+        regardless of whether validation succeeds or raises.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            tag: Tag to validate
+            request: Bundled verification options
+            set_org: Whether to record the GitHub org for Gerrit discovery
+
+        Returns:
+            ValidationResult: Result of validating the cloned tag.
+        """
+        from dependamerge.git_ops import secure_rmtree
+        temp_dir, _tag_info = await self.operations.clone_remote_tag(
+            owner=owner,
+            repo=repo,
+            tag=tag,
+            token=request.github_token,
+        )
+        # Capture before the try so the finally can always restore it
+        original_repo_path = self.repo_path
+        try:
+            # Update repo path and detector
+            self.repo_path = temp_dir
+            self.detector = SignatureDetector(temp_dir)
+
+            if set_org:
+                # Store GitHub org for Gerrit auto-discovery
+                self._current_github_org = owner
+            # Store repo context for increment/branch checks
+            self._current_repo_context = (owner, repo)
+
+            # Validate the tag
+            return await self.validate_tag(
+                tag,
+                request.github_user,
+                request.github_token,
+                request.require_owners,
+            )
+        finally:
+            # Always restore the original repo path/detector so a failed
+            # validation does not leave the instance pointing at the
+            # now-deleted temporary checkout
+            self.repo_path = original_repo_path
+            self.detector = SignatureDetector(original_repo_path)
+            # Clean up temporary directory
+            secure_rmtree(temp_dir)
+            logger.debug(f"Cleaned up temporary directory: {temp_dir}")
+            if set_org:
+                self._current_github_org = None
+            self._current_repo_context = None
+
+    async def _validate_definite_remote(
+        self,
+        tag_location: str,
+        request: _TagLocationRequest,
+    ) -> ValidationResult:
+        """Validate a definite remote tag (owner/repo@tag or GitHub URL).
+
+        Args:
+            tag_location: Remote tag location string
+            request: Bundled verification options
+
+        Returns:
+            ValidationResult: Complete validation result.
+        """
+        try:
+            owner, repo, tag = self.operations.parse_tag_location(tag_location)
+            logger.debug(f"Parsed location: {owner}/{repo}@{tag}")
+            return await self._clone_and_validate(
+                owner, repo, tag, request, set_org=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to validate remote tag: {e}")
+            result = self._failed_result(
+                tag_location, f"Failed to validate remote tag: {e}"
+            )
+            # Provide helpful context
+            if "parse_tag_location" in str(e):
+                result.add_info(
+                    "Expected format: 'owner/repo@tag' "
+                    "(e.g., 'torvalds/linux@v6.0')"
                 )
+            return result
 
-                try:
-                    # Update repo path and detector
-                    original_repo_path = self.repo_path
-                    self.repo_path = temp_dir
-                    self.detector = SignatureDetector(temp_dir)
+    async def _validate_ambiguous_tag_location(
+        self,
+        tag_location: str,
+        request: _TagLocationRequest,
+    ) -> ValidationResult:
+        """Validate an ambiguous location, trying local path then remote.
 
-                    # Store GitHub org for Gerrit auto-discovery
-                    self._current_github_org = owner
-                    # Store repo context for increment/branch checks
-                    self._current_repo_context = (owner, repo)
+        Args:
+            tag_location: Ambiguous tag location (path/to/repo/tag form)
+            request: Bundled verification options
 
-                    # Validate the tag
-                    result = await self.validate_tag(tag, github_user, github_token, require_owners)
+        Returns:
+            ValidationResult: Complete validation result.
+        """
+        # Split into potential repo path and tag name
+        parts = tag_location.rsplit("/", 1)
+        potential_repo_path = parts[0]
+        potential_tag = parts[1] if len(parts) > 1 else tag_location
 
-                    # Restore original repo path
-                    self.repo_path = original_repo_path
-                    self.detector = SignatureDetector(original_repo_path)
+        # Check if it looks like a local path (directory exists)
+        local_path = Path(self.repo_path) / potential_repo_path
 
-                    return result
+        if local_path.is_dir() and (local_path / ".git").exists():
+            return await self._validate_local_repo_path(
+                tag_location, local_path, potential_repo_path,
+                potential_tag, request,
+            )
+        return await self._validate_remote_fallback(tag_location, request)
 
-                finally:
-                    # Clean up temporary directory
-                    secure_rmtree(temp_dir)
-                    logger.debug(f"Cleaned up temporary directory: {temp_dir}")
-                    # Clear stored org
-                    self._current_github_org = None
-                    self._current_repo_context = None
+    async def _validate_local_repo_path(
+        self,
+        tag_location: str,
+        local_path: Path,
+        potential_repo_path: str,
+        potential_tag: str,
+        request: _TagLocationRequest,
+    ) -> ValidationResult:
+        """Validate a tag inside a discovered local repository path.
 
-            except Exception as e:
-                logger.error(f"Failed to validate remote tag: {e}")
-                result = ValidationResult(
-                    tag_name=tag_location,
-                    is_valid=False,
-                    config=self.config,
-                    tag_info=None,
-                    version_info=None,
-                    signature_info=None,
+        Args:
+            tag_location: Original tag location string
+            local_path: Resolved local repository path
+            potential_repo_path: Repo path portion of the location
+            potential_tag: Tag portion of the location
+            request: Bundled verification options
+
+        Returns:
+            ValidationResult: Complete validation result.
+        """
+        logger.debug(
+            f"Treating as local repo path: "
+            f"{potential_repo_path}/{potential_tag}"
+        )
+        # Capture before the try so except handlers can restore it
+        original_repo_path = self.repo_path
+        try:
+            # Update repo path and detector temporarily
+            self.repo_path = local_path
+            self.detector = SignatureDetector(local_path)
+            result = await self.validate_tag(
+                potential_tag,
+                request.github_user,
+                request.github_token,
+                request.require_owners,
+            )
+            # Restore original repo path
+            self.repo_path = original_repo_path
+            self.detector = SignatureDetector(original_repo_path)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to validate local tag: {e}")
+            # Restore original repo path
+            self.repo_path = original_repo_path
+            self.detector = SignatureDetector(original_repo_path)
+            result = self._failed_result(
+                tag_location, f"Failed to validate local tag: {e}"
+            )
+            # Add helpful hint about tag format
+            if "not a git repository" in str(e).lower():
+                result.add_info(
+                    f"Repository path '{potential_repo_path}' was found "
+                    "but may have issues. Verify that it contains a valid "
+                    ".git directory."
                 )
-                error_msg = f"Failed to validate remote tag: {e}"
-                result.add_error(error_msg)
+            return result
 
-                # Provide helpful context
-                if "parse_tag_location" in str(e):
-                    result.add_info(
-                        "Expected format: 'owner/repo@tag' (e.g., 'torvalds/linux@v6.0')"
-                    )
-                return result
+    async def _validate_remote_fallback(
+        self,
+        tag_location: str,
+        request: _TagLocationRequest,
+    ) -> ValidationResult:
+        """Validate an ambiguous location as a remote tag (fallback).
 
-        elif "/" in tag_location:
-            # Ambiguous: could be local path (path/to/repo/tag) or remote (owner/repo/tag)
-            # Try local path first (pragmatic fallback)
+        Args:
+            tag_location: Original tag location string
+            request: Bundled verification options
 
-            # Split into potential repo path and tag name
+        Returns:
+            ValidationResult: Complete validation result.
+        """
+        logger.debug(
+            f"Local path not found, treating as remote: {tag_location}"
+        )
+        # Convert owner/repo/tag to owner/repo@tag if needed
+        if tag_location.count("/") >= 2:
             parts = tag_location.rsplit("/", 1)
-            potential_repo_path = parts[0]
-            potential_tag = parts[1] if len(parts) > 1 else tag_location
-
-            # Check if it looks like a local path (directory exists)
-            from pathlib import Path
-            local_path = Path(self.repo_path) / potential_repo_path
-
-            if local_path.is_dir() and (local_path / ".git").exists():
-                # It's a local repository path
-                logger.debug(f"Treating as local repo path: {potential_repo_path}/{potential_tag}")
-
-                try:
-                    # Update repo path and detector temporarily
-                    original_repo_path = self.repo_path
-                    self.repo_path = local_path
-                    self.detector = SignatureDetector(local_path)
-
-                    # Validate the tag
-                    result = await self.validate_tag(potential_tag, github_user, github_token, require_owners)
-
-                    # Restore original repo path
-                    self.repo_path = original_repo_path
-                    self.detector = SignatureDetector(original_repo_path)
-
-                    return result
-
-                except Exception as e:
-                    logger.error(f"Failed to validate local tag: {e}")
-                    # Restore original repo path
-                    self.repo_path = original_repo_path
-                    self.detector = SignatureDetector(original_repo_path)
-
-                    result = ValidationResult(
-                        tag_name=tag_location,
-                        is_valid=False,
-                        config=self.config,
-                        tag_info=None,
-                        version_info=None,
-                        signature_info=None,
-                    )
-                    error_msg = f"Failed to validate local tag: {e}"
-                    result.add_error(error_msg)
-
-                    # Add helpful hint about tag format
-                    if "not a git repository" in str(e).lower():
-                        result.add_info(
-                            f"Repository path '{potential_repo_path}' was found but may have issues. "
-                            "Verify that it contains a valid .git directory."
-                        )
-                    return result
-
-            else:
-                # Not a local path, try as remote (owner/repo/tag or owner/repo@tag)
-                logger.debug(f"Local path not found, treating as remote: {tag_location}")
-
-                # Convert owner/repo/tag to owner/repo@tag if needed
-                slash_count = tag_location.count("/")
-                if slash_count >= 2:
-                    # Convert last slash to @
-                    parts = tag_location.rsplit("/", 1)
-                    normalized_location = f"{parts[0]}@{parts[1]}"
-                else:
-                    normalized_location = tag_location
-
-                # Try as remote tag
-                try:
-                    owner, repo, tag = self.operations.parse_tag_location(normalized_location)
-                    logger.debug(f"Parsed as remote location: {owner}/{repo}@{tag}")
-
-                    # Clone the repository
-                    from dependamerge.git_ops import secure_rmtree
-                    temp_dir, tag_info = await self.operations.clone_remote_tag(
-                        owner=owner,
-                        repo=repo,
-                        tag=tag,
-                        token=github_token,
-                    )
-
-                    try:
-                        # Update repo path and detector
-                        original_repo_path = self.repo_path
-                        self.repo_path = temp_dir
-                        self.detector = SignatureDetector(temp_dir)
-
-                        # Store repo context for increment/branch checks
-                        self._current_repo_context = (owner, repo)
-
-                        # Validate the tag
-                        result = await self.validate_tag(tag, github_user, github_token, require_owners)
-
-                        # Restore original repo path
-                        self.repo_path = original_repo_path
-                        self.detector = SignatureDetector(original_repo_path)
-
-                        return result
-
-                    finally:
-                        # Clean up temporary directory
-                        secure_rmtree(temp_dir)
-                        logger.debug(f"Cleaned up temporary directory: {temp_dir}")
-                        self._current_repo_context = None
-
-                except Exception as e:
-                    logger.error(f"Failed to validate as remote tag: {e}")
-                    result = ValidationResult(
-                        tag_name=tag_location,
-                        is_valid=False,
-                        config=self.config,
-                        tag_info=None,
-                        version_info=None,
-                        signature_info=None,
-                    )
-                    error_msg = f"Failed to validate remote tag: {e}"
-
-                    # Add helpful suggestions based on the error
-                    if "couldn't find remote ref" in str(e).lower() or "not found" in str(e).lower():
-                        result.add_error(error_msg)
-                        result.add_warning(
-                            f"Tag '{tag_location}' not found. "
-                            "Please verify the tag exists in the remote repository."
-                        )
-                    elif "failed to clone" in str(e).lower():
-                        result.add_error(error_msg)
-                        result.add_warning(
-                            "Possible formats: 'owner/repo@tag', './local/repo/tag', or 'tag-name'"
-                        )
-                    else:
-                        result.add_error(error_msg)
-                    return result
-
+            normalized_location = f"{parts[0]}@{parts[1]}"
         else:
-            # No slash or @ - treat as local tag name in current repo
-            return await self.validate_tag(tag_location, github_user, github_token, require_owners)
+            normalized_location = tag_location
+
+        try:
+            owner, repo, tag = self.operations.parse_tag_location(
+                normalized_location
+            )
+            logger.debug(f"Parsed as remote location: {owner}/{repo}@{tag}")
+            return await self._clone_and_validate(
+                owner, repo, tag, request, set_org=False,
+            )
+        except Exception as e:
+            logger.error(f"Failed to validate as remote tag: {e}")
+            result = self._failed_result(
+                tag_location, f"Failed to validate remote tag: {e}"
+            )
+            # Add helpful suggestions based on the error
+            lower = str(e).lower()
+            if "couldn't find remote ref" in lower or "not found" in lower:
+                result.add_warning(
+                    f"Tag '{tag_location}' not found. "
+                    "Please verify the tag exists in the remote repository."
+                )
+            elif "failed to clone" in lower:
+                result.add_warning(
+                    "Possible formats: 'owner/repo@tag', "
+                    "'./local/repo/tag', or 'tag-name'"
+                )
+            return result
 
     def create_validation_summary(self, result: ValidationResult) -> str:
         """Create a human-readable validation summary.
@@ -1577,191 +1884,29 @@ class ValidationWorkflow:
         Returns:
             str: Formatted summary text
         """
-        lines = []
+        lines: list[str] = []
 
         # Header
         status = "✅" if result.is_valid else "❌"
         lines.append(f"Overall Validation Result {status}")
         lines.append("")
 
-        # Version info
-        if result.version_info:
-            v = result.version_info
-
-            # Show validation status if version type requirement was specified
-            version_status = ""
-            if result.config.require_semver or result.config.require_calver:
-                # Check if version type meets requirements
-                required_types = []
-                if result.config.require_semver:
-                    required_types.append("semver")
-                if result.config.require_calver:
-                    required_types.append("calver")
-
-                # "both" type satisfies either requirement
-                if v.version_type == "both" or v.version_type in required_types:
-                    version_status = " ✅"
-                else:
-                    version_status = " ❌"
-
-            lines.append(f"Tag Validation: {result.tag_name}{version_status}")
-            lines.append(f"  Type: {v.version_type.upper()}")
-            if v.version_type == "semver":
-                lines.append(f"  Components: {v.major}.{v.minor}.{v.patch}")
-                if v.prerelease:
-                    lines.append(f"  Prerelease: {v.prerelease}")
-            elif v.version_type == "calver":
-                lines.append(f"  Date: {v.year}.{v.month}.{v.day or v.micro}")
-            if v.is_development:
-                lines.append("  Development: Yes")
-            lines.append("")
-
-        # Signature info
-        if result.signature_info:
-            s = result.signature_info
-            # Display signature type with friendly names
-            type_display = {
-                "gpg": "GPG",
-                "ssh": "SSH",
-                "unsigned": "UNSIGNED",
-                "lightweight": "LIGHTWEIGHT",
-                "invalid": "INVALID (corrupted/tampered)",
-                "gpg-unverifiable": "GPG (key not available)",
-            }
-            sig_type = type_display.get(s.type, s.type.upper())
-
-            # Show validation status if signature requirement was specified
-            signature_status = ""
-            if result.config.require_signed or result.config.require_unsigned or result.config.allowed_signature_types:
-                # Check if signature meets requirements
-                signature_valid = self._check_signature_requirements_status(result.signature_info, result.config)
-                signature_status = " ✅" if signature_valid else " ❌"
-
-            lines.append(f"Tag Signing{signature_status}")
-
-            if s.type in ["gpg", "ssh", "gpg-unverifiable", "invalid"]:
-                lines.append(f"  Key Type: {sig_type}")
-                if s.type == "gpg-unverifiable":
-                    lines.append("  Status: Key not available for verification")
-                elif s.type == "invalid":
-                    lines.append("  Status: Signature is corrupted or tampered")
-                if s.signer_email:
-                    lines.append(f"  Signer: {s.signer_email}")
-                if s.key_id:
-                    lines.append(f"  Key ID: {s.key_id}")
-            lines.append("")
-
-        # Increment enforcement
-        if result.increment_check and result.increment_check.checked:
-            ic = result.increment_check
-            status_icon = "✅" if ic.incremental else "❌"
-            lines.append(f"Version Increment {status_icon}")
-            if len(ic.latest_tags) > 1:
-                # Multi-scheme push: report each scheme's baseline
-                for scheme, tag in sorted(ic.latest_tags.items()):
-                    lines.append(f"  Latest Existing Tag ({scheme}): {tag}")
-            elif ic.latest_tag:
-                lines.append(f"  Latest Existing Tag: {ic.latest_tag}")
-            elif ic.incremental:
-                lines.append("  First version tag in repository")
-            if ic.scheme:
-                lines.append(f"  Comparison Scheme: {ic.scheme}")
-            lines.append("")
-
-        # Branch containment
-        if result.branch_check and result.branch_check.checked:
-            bc = result.branch_check
-            status_icon = "✅" if bc.contains else "❌"
-            lines.append(f"Branch Containment {status_icon}")
-            if bc.branch:
-                lines.append(f"  Branch: {bc.branch}")
-            if bc.method:
-                lines.append(f"  Method: {bc.method}")
-            lines.append("")
-
-        # Tag age (freshness)
-        if result.age_check and result.age_check.checked:
-            ac = result.age_check
-            status_icon = "✅" if ac.recent else "❌"
-            lines.append(f"Tag Freshness {status_icon}")
-            if ac.max_age_minutes is not None:
-                lines.append(f"  Window: {ac.max_age_minutes:g} minute(s)")
-            if ac.age_seconds is not None:
-                lines.append(f"  Tag Age: {ac.age_seconds:.0f} seconds")
-            lines.append("")
-
-        # Latest commit (branch tip)
-        if result.latest_check and result.latest_check.checked:
-            lc = result.latest_check
-            status_icon = "✅" if lc.latest else "❌"
-            lines.append(f"Latest Commit {status_icon}")
-            if lc.branch:
-                lines.append(f"  Branch: {lc.branch}")
-            if lc.branch_sha:
-                lines.append(f"  Branch Tip: {lc.branch_sha[:12]}")
-            if lc.method:
-                lines.append(f"  Method: {lc.method}")
-            lines.append("")
-
-        # Key verification - show all verifications (GitHub and/or Gerrit)
-        if result.key_verifications:
-            for k in result.key_verifications:
-                # Determine service name and status
-                service_name = "Gerrit" if k.service == "gerrit" else "GitHub"
-                status_icon = "✅" if k.key_registered else "❌"
-
-                lines.append(f"{service_name} Registered {status_icon}")
-
-                # Show server info using shared utility
-                server_line = format_server_display(k.service, k.server)
-                if server_line:
-                    lines.append(server_line)
-
-                lines.append("")
-                lines.append(f"{service_name} User:")
-
-                # Build user details using shared utility
-                user_lines = format_user_details(
-                    username=k.username,
-                    email=k.user_email,
-                    name=k.user_name
-                )
-                lines.extend(user_lines)
-                lines.append("")
+        lines.extend(self._summary_version_lines(result))
+        lines.extend(self._summary_signature_lines(result))
+        lines.extend(self._summary_increment_lines(result))
+        lines.extend(self._summary_branch_lines(result))
+        lines.extend(self._summary_age_lines(result))
+        lines.extend(self._summary_latest_lines(result))
+        lines.extend(self._summary_key_verification_lines(result))
 
         # Errors - filter out redundant registration errors
-        if result.errors:
-            # Filter out errors that are redundant with the registration status display
-            # Collect all services shown in key_verifications section
-            services_in_display = set()
-            if result.key_verifications:
-                services_in_display = {k.service for k in result.key_verifications}
-
-            filtered_errors = []
-            for error in result.errors:
-                error_lower = error.lower()
-                is_registration_error = "not registered" in error_lower
-
-                # Check which service this error is about
-                is_github_error = "github" in error_lower
-                is_gerrit_error = "gerrit" in error_lower
-
-                # Only filter if this error is about a service shown in key_verifications section
-                should_filter = (
-                    is_registration_error and
-                    ((is_github_error and "github" in services_in_display) or
-                     (is_gerrit_error and "gerrit" in services_in_display))
-                )
-
-                if not should_filter:
-                    filtered_errors.append(error)
-            if filtered_errors:
-                # Add blank line before section if needed
-                if lines and lines[-1] != "":
-                    lines.append("")
-                lines.append("Errors:")
-                for error in filtered_errors:
-                    lines.append(f"  • {error}")
+        filtered_errors = self._summary_filtered_errors(result)
+        if filtered_errors:
+            # Add blank line before section if needed
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append("Errors:")
+            lines.extend(f"  • {error}" for error in filtered_errors)
 
         # Warnings
         if result.warnings:
@@ -1769,23 +1914,223 @@ class ValidationWorkflow:
             if lines and lines[-1] != "":
                 lines.append("")
             lines.append("Warnings:")
-            for warning in result.warnings:
-                lines.append(f"  • {warning}")
+            lines.extend(f"  • {warning}" for warning in result.warnings)
 
         # Info messages
         if result.info:
-            # Only add blank line if we didn't just add one from signature section
+            # Only add blank line if we didn't just add one from a prior section
             if lines and lines[-1] != "":
                 lines.append("")
             lines.append("Additional Information:")
-            for info in result.info:
-                lines.append(f"  • {info}")
+            lines.extend(f"  • {info}" for info in result.info)
 
         # Remove trailing empty line if present
         while lines and lines[-1] == "":
             lines.pop()
 
         return "\n".join(lines)
+
+    def _summary_version_lines(self, result: ValidationResult) -> list[str]:
+        """Build the version-info section of the summary."""
+        if not result.version_info:
+            return []
+        v = result.version_info
+        lines: list[str] = []
+
+        # Show validation status if version type requirement was specified
+        version_status = ""
+        if result.config.require_semver or result.config.require_calver:
+            required_types = []
+            if result.config.require_semver:
+                required_types.append("semver")
+            if result.config.require_calver:
+                required_types.append("calver")
+            # "both" type satisfies either requirement
+            if v.version_type == "both" or v.version_type in required_types:
+                version_status = " ✅"
+            else:
+                version_status = " ❌"
+
+        lines.append(f"Tag Validation: {result.tag_name}{version_status}")
+        lines.append(f"  Type: {v.version_type.upper()}")
+        if v.version_type == "semver":
+            lines.append(f"  Components: {v.major}.{v.minor}.{v.patch}")
+            if v.prerelease:
+                lines.append(f"  Prerelease: {v.prerelease}")
+        elif v.version_type == "calver":
+            lines.append(f"  Date: {v.year}.{v.month}.{v.day or v.micro}")
+        if v.is_development:
+            lines.append("  Development: Yes")
+        lines.append("")
+        return lines
+
+    def _summary_signature_lines(self, result: ValidationResult) -> list[str]:
+        """Build the signature-info section of the summary."""
+        if not result.signature_info:
+            return []
+        s = result.signature_info
+        # Display signature type with friendly names
+        type_display = {
+            "gpg": "GPG",
+            "ssh": "SSH",
+            "unsigned": "UNSIGNED",
+            "lightweight": "LIGHTWEIGHT",
+            "invalid": "INVALID (corrupted/tampered)",
+            "gpg-unverifiable": "GPG (key not available)",
+        }
+        sig_type = type_display.get(s.type, s.type.upper())
+
+        # Show validation status if signature requirement was specified
+        signature_status = ""
+        if (
+            result.config.require_signed
+            or result.config.require_unsigned
+            or result.config.allowed_signature_types
+        ):
+            signature_valid = self._check_signature_requirements_status(
+                result.signature_info, result.config
+            )
+            signature_status = " ✅" if signature_valid else " ❌"
+
+        lines: list[str] = [f"Tag Signing{signature_status}"]
+        if s.type in ["gpg", "ssh", "gpg-unverifiable", "invalid"]:
+            lines.append(f"  Key Type: {sig_type}")
+            if s.type == "gpg-unverifiable":
+                lines.append("  Status: Key not available for verification")
+            elif s.type == "invalid":
+                lines.append("  Status: Signature is corrupted or tampered")
+            if s.signer_email:
+                lines.append(f"  Signer: {s.signer_email}")
+            if s.key_id:
+                lines.append(f"  Key ID: {s.key_id}")
+        lines.append("")
+        return lines
+
+    def _summary_increment_lines(self, result: ValidationResult) -> list[str]:
+        """Build the version-increment section of the summary."""
+        if not (result.increment_check and result.increment_check.checked):
+            return []
+        ic = result.increment_check
+        status_icon = "✅" if ic.incremental else "❌"
+        lines: list[str] = [f"Version Increment {status_icon}"]
+        if len(ic.latest_tags) > 1:
+            # Multi-scheme push: report each scheme's baseline
+            for scheme, tag in sorted(ic.latest_tags.items()):
+                lines.append(f"  Latest Existing Tag ({scheme}): {tag}")
+        elif ic.latest_tag:
+            lines.append(f"  Latest Existing Tag: {ic.latest_tag}")
+        elif ic.incremental:
+            lines.append("  First version tag in repository")
+        if ic.scheme:
+            lines.append(f"  Comparison Scheme: {ic.scheme}")
+        lines.append("")
+        return lines
+
+    def _summary_branch_lines(self, result: ValidationResult) -> list[str]:
+        """Build the branch-containment section of the summary."""
+        if not (result.branch_check and result.branch_check.checked):
+            return []
+        bc = result.branch_check
+        status_icon = "✅" if bc.contains else "❌"
+        lines: list[str] = [f"Branch Containment {status_icon}"]
+        if bc.branch:
+            lines.append(f"  Branch: {bc.branch}")
+        if bc.method:
+            lines.append(f"  Method: {bc.method}")
+        lines.append("")
+        return lines
+
+    def _summary_age_lines(self, result: ValidationResult) -> list[str]:
+        """Build the tag-freshness section of the summary."""
+        if not (result.age_check and result.age_check.checked):
+            return []
+        ac = result.age_check
+        status_icon = "✅" if ac.recent else "❌"
+        lines: list[str] = [f"Tag Freshness {status_icon}"]
+        if ac.max_age_minutes is not None:
+            lines.append(f"  Window: {ac.max_age_minutes:g} minute(s)")
+        if ac.age_seconds is not None:
+            lines.append(f"  Tag Age: {ac.age_seconds:.0f} seconds")
+        lines.append("")
+        return lines
+
+    def _summary_latest_lines(self, result: ValidationResult) -> list[str]:
+        """Build the latest-commit section of the summary."""
+        if not (result.latest_check and result.latest_check.checked):
+            return []
+        lc = result.latest_check
+        status_icon = "✅" if lc.latest else "❌"
+        lines: list[str] = [f"Latest Commit {status_icon}"]
+        if lc.branch:
+            lines.append(f"  Branch: {lc.branch}")
+        if lc.branch_sha:
+            lines.append(f"  Branch Tip: {lc.branch_sha[:12]}")
+        if lc.method:
+            lines.append(f"  Method: {lc.method}")
+        lines.append("")
+        return lines
+
+    def _summary_key_verification_lines(
+        self, result: ValidationResult
+    ) -> list[str]:
+        """Build the key-verification section of the summary."""
+        if not result.key_verifications:
+            return []
+        lines: list[str] = []
+        for k in result.key_verifications:
+            # Determine service name and status
+            service_name = "Gerrit" if k.service == "gerrit" else "GitHub"
+            status_icon = "✅" if k.key_registered else "❌"
+            lines.append(f"{service_name} Registered {status_icon}")
+
+            # Show server info using shared utility
+            server_line = format_server_display(k.service, k.server)
+            if server_line:
+                lines.append(server_line)
+
+            lines.append("")
+            lines.append(f"{service_name} User:")
+
+            # Build user details using shared utility
+            user_lines = format_user_details(
+                username=k.username,
+                email=k.user_email,
+                name=k.user_name,
+            )
+            lines.extend(user_lines)
+            lines.append("")
+        return lines
+
+    def _summary_filtered_errors(self, result: ValidationResult) -> list[str]:
+        """Return errors with redundant registration errors filtered out.
+
+        Registration errors for a service already shown in the key
+        verification section are omitted to avoid duplication.
+        """
+        if not result.errors:
+            return []
+        # Collect all services shown in key_verifications section
+        services_in_display: set[str] = set()
+        if result.key_verifications:
+            services_in_display = {
+                k.service for k in result.key_verifications
+            }
+
+        filtered_errors: list[str] = []
+        for error in result.errors:
+            error_lower = error.lower()
+            is_registration_error = "not registered" in error_lower
+            # Check which service this error is about
+            is_github_error = "github" in error_lower
+            is_gerrit_error = "gerrit" in error_lower
+            # Only filter if this error is about a service shown above
+            should_filter = is_registration_error and (
+                (is_github_error and "github" in services_in_display)
+                or (is_gerrit_error and "gerrit" in services_in_display)
+            )
+            if not should_filter:
+                filtered_errors.append(error)
+        return filtered_errors
 
     def _check_signature_requirements_status(
         self,

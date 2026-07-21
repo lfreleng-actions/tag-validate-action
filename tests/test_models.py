@@ -11,6 +11,8 @@ This module tests:
 - Model relationships
 """
 
+from typing import Literal
+
 from tag_validate.models import (
     GitHubVerificationInfo,
     GPGKeyInfo,
@@ -30,7 +32,11 @@ class TestSignatureTypes:
 
     def test_signature_type_values(self):
         """Test valid signature type values."""
-        valid_types = [
+        valid_types: list[
+            Literal[
+                "gpg", "ssh", "unsigned", "lightweight", "invalid", "gpg-unverifiable"
+            ]
+        ] = [
             "gpg",
             "ssh",
             "unsigned",
@@ -505,10 +511,12 @@ class TestValidationResult:
                 fingerprint=None,
                 signature_data="Good signature",
             ),
-            key_verification=KeyVerificationResult(
-                key_registered=True,
-                username="testuser",
-            ),
+            key_verifications=[
+                KeyVerificationResult(
+                    key_registered=True,
+                    username="testuser",
+                )
+            ],
             errors=[],
             warnings=[],
         )
@@ -823,6 +831,7 @@ class TestValidationConfigWithGerrit:
         assert config.require_github is True
         assert config.require_gerrit is True
         assert config.gerrit_server == "gerrit.onap.org"
+        assert config.allowed_signature_types is not None
         assert "gpg" in config.allowed_signature_types
         assert "ssh" in config.allowed_signature_types
 
@@ -858,7 +867,7 @@ class TestGerritIntegration:
         result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=True,
+            user_enumerated=True,
             key_info=ssh_key,
             service="gerrit",
             server="gerrit.onap.org",

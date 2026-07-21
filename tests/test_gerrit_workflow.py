@@ -182,7 +182,7 @@ class TestGerritKeyVerification:
         mock_key_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -232,7 +232,7 @@ class TestGerritKeyVerification:
         mock_key_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -313,7 +313,7 @@ class TestGerritKeyVerification:
         mock_key_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -435,7 +435,7 @@ class TestGerritWorkflowIntegration:
         mock_gerrit_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -501,7 +501,7 @@ class TestGerritWorkflowIntegration:
         mock_gerrit_result = KeyVerificationResult(
             key_registered=False,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",
@@ -569,7 +569,7 @@ class TestGerritWorkflowIntegration:
         mock_github_result = KeyVerificationResult(
             key_registered=True,
             username="johndoe",
-            enumerated=True,
+            user_enumerated=True,
             key_info=None,
             service="github",
             server=None,
@@ -579,7 +579,7 @@ class TestGerritWorkflowIntegration:
         mock_gerrit_result = KeyVerificationResult(
             key_registered=True,
             username="12345",
-            enumerated=False,
+            user_enumerated=False,
             key_info=None,
             service="gerrit",
             server="gerrit.onap.org",

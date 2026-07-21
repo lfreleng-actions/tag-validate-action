@@ -458,6 +458,8 @@ async def _list_tags_via_api(context: RepoContext, token: str | None) -> list[st
         ):
             if isinstance(page, list):
                 for entry in page:
+                    if not isinstance(entry, dict):
+                        continue
                     name = entry.get("name")
                     if name:
                         tags.append(name)

@@ -56,12 +56,12 @@ class SignatureDetector:
         re.IGNORECASE,
     )
 
-    def __init__(self, repo_path: Path):
+    def __init__(self, repo_path: str | Path):
         """
         Initialize the signature detector.
 
         Args:
-            repo_path: Path to the Git repository
+            repo_path: Path to the Git repository (str or Path)
         """
         self.repo_path = Path(repo_path)
         if not self.repo_path.is_dir():

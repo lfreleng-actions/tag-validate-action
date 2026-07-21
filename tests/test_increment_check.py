@@ -6,6 +6,7 @@
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -792,7 +793,7 @@ class TestWorkflowIntegration:
 
 
 def _tag_info(
-    tag_type: str = "annotated",
+    tag_type: Literal["lightweight", "annotated"] = "annotated",
     tag_date: str | None = None,
 ) -> TagInfo:
     """Build a TagInfo for tag age check tests."""
