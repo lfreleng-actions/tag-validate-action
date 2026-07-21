@@ -72,6 +72,7 @@ app = CustomTyper(
 def _process_global_options():
     """Process global options like --verbose and --debug from command line args."""
     import sys
+
     verbose = False
     debug = False
 
@@ -80,9 +81,9 @@ def _process_global_options():
     i = 0
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg in ['--verbose', '-V']:
+        if arg in ["--verbose", "-V"]:
             verbose = True
-        elif arg == '--debug':
+        elif arg == "--debug":
             debug = True
         else:
             new_argv.append(arg)
@@ -119,7 +120,7 @@ def _normalize_ssh_fingerprint(key_id: str) -> str:
         normalized = key_id[sha_index:]
 
         # Validate SHA256 format: SHA256:base64_string
-        sha256_pattern = r'^SHA256:([A-Za-z0-9+/]{43}=?|[A-Za-z0-9+/]{44})$'
+        sha256_pattern = r"^SHA256:([A-Za-z0-9+/]{43}=?|[A-Za-z0-9+/]{44})$"
         if not re.match(sha256_pattern, normalized, re.IGNORECASE):
             # Check if it's just empty hash
             if normalized.upper() == "SHA256:":
@@ -130,11 +131,17 @@ def _normalize_ssh_fingerprint(key_id: str) -> str:
                 raise ValueError("SHA256 fingerprint cannot be empty")
             try:
                 # Validate Base64 format (SHA256 hash should be 32 bytes = 43-44 chars in base64)
-                decoded = base64.b64decode(hash_part + '==', validate=True)  # Add padding for validation
+                decoded = base64.b64decode(
+                    hash_part + "==", validate=True
+                )  # Add padding for validation
                 if len(decoded) != 32:
-                    raise ValueError(f"SHA256 fingerprint has invalid length: expected 32 bytes, got {len(decoded)}")
+                    raise ValueError(
+                        f"SHA256 fingerprint has invalid length: expected 32 bytes, got {len(decoded)}"
+                    )
             except Exception as exc:
-                raise ValueError(f"SHA256 fingerprint contains invalid Base64 characters: {hash_part}") from exc
+                raise ValueError(
+                    f"SHA256 fingerprint contains invalid Base64 characters: {hash_part}"
+                ) from exc
 
     elif "md5:" in key_lower:
         # Extract just the MD5: part
@@ -142,7 +149,7 @@ def _normalize_ssh_fingerprint(key_id: str) -> str:
         normalized = key_id[md5_index:]
 
         # Validate MD5 format: MD5:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx
-        md5_pattern = r'^MD5:([0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}$'
+        md5_pattern = r"^MD5:([0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}$"
         if not re.match(md5_pattern, normalized, re.IGNORECASE):
             # Check if it's just empty hash
             if normalized.upper() == "MD5:":
@@ -153,22 +160,32 @@ def _normalize_ssh_fingerprint(key_id: str) -> str:
                 raise ValueError("MD5 fingerprint cannot be empty")
             # Should be exactly 47 characters: 16 hex pairs separated by colons
             if len(hash_part) != 47:
-                raise ValueError(f"MD5 fingerprint has invalid length: expected 47 characters, got {len(hash_part)}")
+                raise ValueError(
+                    f"MD5 fingerprint has invalid length: expected 47 characters, got {len(hash_part)}"
+                )
             # Check format with colons
-            hex_parts = hash_part.split(':')
+            hex_parts = hash_part.split(":")
             if len(hex_parts) != 16:
-                raise ValueError(f"MD5 fingerprint should have 16 hex pairs separated by colons, got {len(hex_parts)}")
+                raise ValueError(
+                    f"MD5 fingerprint should have 16 hex pairs separated by colons, got {len(hex_parts)}"
+                )
             # Validate each hex pair
             for i, part in enumerate(hex_parts):
                 if len(part) != 2:
-                    raise ValueError(f"MD5 fingerprint hex pair {i+1} has invalid length: expected 2 characters, got {len(part)}")
-                if not re.match(r'^[0-9a-fA-F]{2}$', part):
-                    raise ValueError(f"MD5 fingerprint contains invalid hex characters in pair {i+1}: {part}")
+                    raise ValueError(
+                        f"MD5 fingerprint hex pair {i + 1} has invalid length: expected 2 characters, got {len(part)}"
+                    )
+                if not re.match(r"^[0-9a-fA-F]{2}$", part):
+                    raise ValueError(
+                        f"MD5 fingerprint contains invalid hex characters in pair {i + 1}: {part}"
+                    )
 
     return normalized
 
 
-async def _resolve_owner_to_username(owner: str, github_token: str | None = None) -> str:
+async def _resolve_owner_to_username(
+    owner: str, github_token: str | None = None
+) -> str:
     """Resolve owner (email or username) to GitHub username.
 
     Args:
@@ -184,9 +201,12 @@ async def _resolve_owner_to_username(owner: str, github_token: str | None = None
     # If it contains @, treat as email and lookup username
     if "@" in owner:
         if not github_token:
-            raise ValueError("GitHub token is required for email-to-username lookup. Set GITHUB_TOKEN environment variable or pass --token")
+            raise ValueError(
+                "GitHub token is required for email-to-username lookup. Set GITHUB_TOKEN environment variable or pass --token"
+            )
 
         from .github_keys import GitHubKeysClient
+
         async with GitHubKeysClient(token=github_token) as client:
             username = await client.lookup_username_by_email(owner)
             if not username:
@@ -195,6 +215,7 @@ async def _resolve_owner_to_username(owner: str, github_token: str | None = None
     else:
         # Already a username
         return owner
+
 
 # Initialize Rich console (will be reconfigured for JSON output if needed)
 console = Console()
@@ -255,8 +276,8 @@ def parse_multi_value_option(value: str | None) -> list[str]:
         return []
 
     # Parse comma or space-separated values
-    if ',' in value:
-        values = [v.strip().lower() for v in value.split(',') if v.strip()]
+    if "," in value:
+        values = [v.strip().lower() for v in value.split(",") if v.strip()]
     else:
         values = [v.lower() for v in value.split() if v]
 
@@ -272,7 +293,7 @@ def validate_version_types(type_list: list[str]) -> None:
     Raises:
         typer.Exit: If invalid types are found
     """
-    valid_types = {'semver', 'calver', 'both', 'none'}
+    valid_types = {"semver", "calver", "both", "none"}
     invalid_types = set(type_list) - valid_types
 
     if invalid_types:
@@ -290,16 +311,18 @@ def validate_signature_types(sig_list: list[str]) -> None:
     Raises:
         typer.Exit: If invalid types or combinations are found
     """
-    valid_signature_types = {'gpg', 'ssh', 'gpg-unverifiable', 'unsigned'}
+    valid_signature_types = {"gpg", "ssh", "gpg-unverifiable", "unsigned"}
     invalid_types = set(sig_list) - valid_signature_types
 
     if invalid_types:
-        console.print(f"[red]Invalid signature type(s): {', '.join(invalid_types)}[/red]")
+        console.print(
+            f"[red]Invalid signature type(s): {', '.join(invalid_types)}[/red]"
+        )
         console.print("Valid types: gpg, ssh, gpg-unverifiable, unsigned")
         raise typer.Exit(EXIT_INVALID_INPUT)
 
     # Check for invalid combinations
-    if 'unsigned' in sig_list and len(sig_list) > 1:
+    if "unsigned" in sig_list and len(sig_list) > 1:
         console.print("[red]Cannot combine 'unsigned' with other signature types[/red]")
         raise typer.Exit(EXIT_INVALID_INPUT)
 
@@ -388,7 +411,9 @@ def _detect_key_type(key_id: str) -> str:
     key_clean = key_id.replace(" ", "").replace(":", "")
 
     # GPG key IDs are typically 8, 16, or 40 hex characters
-    if len(key_clean) in [8, 16, 40] and all(c in "0123456789ABCDEFabcdef" for c in key_clean):
+    if len(key_clean) in [8, 16, 40] and all(
+        c in "0123456789ABCDEFabcdef" for c in key_clean
+    ):
         return "gpg"
 
     # If we can't determine, return unknown
@@ -437,7 +462,8 @@ def main(
     # Check if --json flag is present in any command
     # This must be done early to suppress logging before commands execute
     import sys
-    if '--json' in sys.argv or '-j' in sys.argv:
+
+    if "--json" in sys.argv or "-j" in sys.argv:
         _suppress_logging_for_json()
         return
 
@@ -449,13 +475,11 @@ def main(
         logger.setLevel(logging.ERROR)
 
 
-
-
 @app.command(name="gerrit")
 def verify_gerrit(
     key_id: str = typer.Argument(
         ...,
-        help="GPG key ID (e.g., 'FCE8AAABF53080F6') or SSH fingerprint (e.g., 'SHA256:...')"
+        help="GPG key ID (e.g., 'FCE8AAABF53080F6') or SSH fingerprint (e.g., 'SHA256:...')",
     ),
     owner: str = typer.Option(
         ...,
@@ -571,6 +595,7 @@ def verify_gerrit(
 
     # Handle test mode first, before any other validations
     if test_mode:
+
         async def _test_mode():
             try:
                 # Suppress ALL logs when in test mode
@@ -583,12 +608,16 @@ def verify_gerrit(
                     if detected_type == "unknown":
                         error_msg = f"Could not auto-detect key type from: {key_id[:50]}... Please specify --type gpg or --type ssh"
                         if json_output:
-                            console.print_json(data={"success": False, "error": error_msg})
+                            console.print_json(
+                                data={"success": False, "error": error_msg}
+                            )
                         else:
                             console.print(f"[red]❌ {error_msg}[/red]")
                         raise typer.Exit(1)
                 elif key_type not in ["gpg", "ssh"]:
-                    error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                    error_msg = (
+                        f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                    )
                     if json_output:
                         console.print_json(data={"success": False, "error": error_msg})
                     else:
@@ -609,13 +638,21 @@ def verify_gerrit(
                             }
                             console.print_json(data=result)
                         else:
-                            console.print("[green]✅ SSH key parsing successful[/green]")
+                            console.print(
+                                "[green]✅ SSH key parsing successful[/green]"
+                            )
                             console.print(f"Original: {key_id}")
                             console.print(f"Normalized: {normalized_fingerprint}")
                     except Exception as e:
                         error_msg = f"SSH key parsing failed: {e}"
                         if json_output:
-                            console.print_json(data={"test_mode": True, "success": False, "error": error_msg})
+                            console.print_json(
+                                data={
+                                    "test_mode": True,
+                                    "success": False,
+                                    "error": error_msg,
+                                }
+                            )
                         else:
                             console.print(f"[red]❌ {error_msg}[/red]")
                         raise typer.Exit(1) from e
@@ -638,7 +675,9 @@ def verify_gerrit(
                 raise
             except Exception as e:
                 if json_output:
-                    console.print_json(data={"test_mode": True, "success": False, "error": str(e)})
+                    console.print_json(
+                        data={"test_mode": True, "success": False, "error": str(e)}
+                    )
                 else:
                     console.print(f"[red]❌ Test failed: {e}[/red]")
                 raise typer.Exit(1) from e
@@ -683,12 +722,16 @@ def verify_gerrit(
                             console.print("[dim]🔑 Using credentials from .netrc[/dim]")
                 except NetrcParseError as e:
                     if not json_output:
-                        console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
+                        console.print(
+                            f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]"
+                        )
                 except FileNotFoundError as exc:
                     if not netrc_optional:
                         error_msg = "No .netrc file found and --netrc-required set"
                         if json_output:
-                            console.print_json(data={"success": False, "error": error_msg})
+                            console.print_json(
+                                data={"success": False, "error": error_msg}
+                            )
                         else:
                             console.print(f"[red]❌ {error_msg}[/red]")
                         raise typer.Exit(EXIT_MISSING_CREDENTIALS) from exc
@@ -705,7 +748,9 @@ def verify_gerrit(
                         console.print(f"[red]❌ {error_msg}[/red]")
                     raise typer.Exit(1)
             elif key_type not in ["gpg", "ssh"]:
-                error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                error_msg = (
+                    f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                )
                 if json_output:
                     console.print_json(data={"success": False, "error": error_msg})
                 else:
@@ -734,7 +779,9 @@ def verify_gerrit(
 
                         if account is None:
                             error_msg = f"Gerrit account not found for '{owner}'"
-                            console.print_json(data={"success": False, "error": error_msg})
+                            console.print_json(
+                                data={"success": False, "error": error_msg}
+                            )
                             raise typer.Exit(EXIT_INVALID_INPUT)
                     except Exception as e:
                         error_msg = f"Failed to find Gerrit account for '{owner}': {e}"
@@ -812,8 +859,19 @@ def verify_gerrit(
                 from typing import Literal, cast
 
                 from .models import SignatureInfo
+
                 mock_signature = SignatureInfo(
-                    type=cast(Literal["gpg", "ssh", "unsigned", "lightweight", "invalid", "gpg-unverifiable"], detected_type),
+                    type=cast(
+                        Literal[
+                            "gpg",
+                            "ssh",
+                            "unsigned",
+                            "lightweight",
+                            "invalid",
+                            "gpg-unverifiable",
+                        ],
+                        detected_type,
+                    ),
                     verified=True,  # We're not verifying a signature, just checking registration
                     key_id=key_id if detected_type == "gpg" else None,
                     fingerprint=key_id if detected_type == "ssh" else None,
@@ -821,8 +879,11 @@ def verify_gerrit(
                     signature_data=None,
                 )
                 _display_verification_result(
-                    verification, mock_signature, owner,
-                    platform="Gerrit", account=account
+                    verification,
+                    mock_signature,
+                    owner,
+                    platform="Gerrit",
+                    account=account,
                 )
 
             # Exit with appropriate code
@@ -837,7 +898,13 @@ def verify_gerrit(
             raise
         except Exception as e:
             if json_output:
-                console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_UNEXPECTED_ERROR})
+                console.print_json(
+                    data={
+                        "success": False,
+                        "error": str(e),
+                        "exit_code": EXIT_UNEXPECTED_ERROR,
+                    }
+                )
             else:
                 console.print(f"\n[red]❌ Error:[/red] {e}")
                 if logger.isEnabledFor(logging.DEBUG):
@@ -854,7 +921,7 @@ def verify_gerrit(
 def verify_github(
     key_id: str = typer.Argument(
         ...,
-        help="GPG key ID (e.g., 'FCE8AAABF53080F6') or SSH fingerprint (e.g., 'SHA256:...')"
+        help="GPG key ID (e.g., 'FCE8AAABF53080F6') or SSH fingerprint (e.g., 'SHA256:...')",
     ),
     owner: str = typer.Option(
         ...,
@@ -901,7 +968,6 @@ def verify_github(
         help="Test key parsing and normalization without making GitHub API calls",
         hidden=True,
     ),
-
 ):
     """
     Verify if a specific GPG key ID or SSH fingerprint is registered on GitHub.
@@ -928,6 +994,7 @@ def verify_github(
 
     # Handle test mode first, before any other validations
     if test_mode:
+
         async def _test_mode():
             # Suppress ALL logs when JSON output is requested
             if json_output:
@@ -945,7 +1012,9 @@ def verify_github(
                         console.print(f"[red]❌ {error_msg}[/red]")
                     raise typer.Exit(1)
             elif key_type not in ["gpg", "ssh"]:
-                error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                error_msg = (
+                    f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                )
                 if json_output:
                     console.print_json(data={"success": False, "error": error_msg})
                 else:
@@ -956,51 +1025,74 @@ def verify_github(
                 if detected_type == "ssh":
                     normalized_fingerprint = _normalize_ssh_fingerprint(key_id)
                     if json_output:
-                        console.print_json(data={
-                            "test_mode": True,
-                            "success": True,
-                            "key_type": detected_type,
-                            "original_input": key_id,
-                            "normalized_fingerprint": normalized_fingerprint,
-                            "owner": owner,
-                        })
+                        console.print_json(
+                            data={
+                                "test_mode": True,
+                                "success": True,
+                                "key_type": detected_type,
+                                "original_input": key_id,
+                                "normalized_fingerprint": normalized_fingerprint,
+                                "owner": owner,
+                            }
+                        )
                     else:
-                        console.print("\n[green]✅ Test Mode: Key parsing successful[/green]")
-                        console.print(f"[bold]Key Type:[/bold] {detected_type}" + (" (auto-detected)" if key_type == "auto" else ""))
+                        console.print(
+                            "\n[green]✅ Test Mode: Key parsing successful[/green]"
+                        )
+                        console.print(
+                            f"[bold]Key Type:[/bold] {detected_type}"
+                            + (" (auto-detected)" if key_type == "auto" else "")
+                        )
                         console.print(f"[bold]Original Input:[/bold] {key_id}")
-                        console.print(f"[bold]Normalized Fingerprint:[/bold] {normalized_fingerprint}")
+                        console.print(
+                            f"[bold]Normalized Fingerprint:[/bold] {normalized_fingerprint}"
+                        )
                         console.print(f"[bold]Owner:[/bold] {owner}")
-                        console.print("\n[dim]No GitHub API calls made in test mode.[/dim]")
+                        console.print(
+                            "\n[dim]No GitHub API calls made in test mode.[/dim]"
+                        )
                 else:  # gpg
                     if json_output:
-                        console.print_json(data={
-                            "test_mode": True,
-                            "success": True,
-                            "key_type": detected_type,
-                            "original_input": key_id,
-                            "normalized_key_id": key_id,
-                            "owner": owner,
-                        })
+                        console.print_json(
+                            data={
+                                "test_mode": True,
+                                "success": True,
+                                "key_type": detected_type,
+                                "original_input": key_id,
+                                "normalized_key_id": key_id,
+                                "owner": owner,
+                            }
+                        )
                     else:
-                        console.print("\n[green]✅ Test Mode: Key parsing successful[/green]")
-                        console.print(f"[bold]Key Type:[/bold] {detected_type}" + (" (auto-detected)" if key_type == "auto" else ""))
+                        console.print(
+                            "\n[green]✅ Test Mode: Key parsing successful[/green]"
+                        )
+                        console.print(
+                            f"[bold]Key Type:[/bold] {detected_type}"
+                            + (" (auto-detected)" if key_type == "auto" else "")
+                        )
                         console.print(f"[bold]Original Input:[/bold] {key_id}")
                         console.print(f"[bold]Normalized Key ID:[/bold] {key_id}")
                         console.print(f"[bold]Owner:[/bold] {owner}")
-                        console.print("\n[dim]No GitHub API calls made in test mode.[/dim]")
+                        console.print(
+                            "\n[dim]No GitHub API calls made in test mode.[/dim]"
+                        )
 
                 import sys
+
                 sys.exit(EXIT_SUCCESS)
             except Exception as e:
                 error_msg = f"Key parsing/normalization failed: {str(e)}"
                 if json_output:
-                    console.print_json(data={
-                        "test_mode": True,
-                        "success": False,
-                        "error": error_msg,
-                        "key_type": detected_type,
-                        "original_input": key_id,
-                    })
+                    console.print_json(
+                        data={
+                            "test_mode": True,
+                            "success": False,
+                            "error": error_msg,
+                            "key_type": detected_type,
+                            "original_input": key_id,
+                        }
+                    )
                 else:
                     console.print(f"\n[red]❌ Test Mode: {error_msg}[/red]")
                 raise typer.Exit(1) from e
@@ -1027,7 +1119,9 @@ def verify_github(
                         console.print(f"[red]❌ {error_msg}[/red]")
                     raise typer.Exit(1)
             elif key_type not in ["gpg", "ssh"]:
-                error_msg = f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                error_msg = (
+                    f"Invalid key type: {key_type}. Must be 'gpg', 'ssh', or 'auto'"
+                )
                 if json_output:
                     console.print_json(data={"success": False, "error": error_msg})
                 else:
@@ -1036,10 +1130,17 @@ def verify_github(
 
             # Validate GitHub token
             import os
+
             if not github_token and not os.getenv("GITHUB_TOKEN"):
                 error_msg = "GitHub token is required. Use --token option or set GITHUB_TOKEN environment variable."
                 if json_output:
-                    console.print_json(data={"success": False, "error": error_msg, "exit_code": EXIT_MISSING_TOKEN})
+                    console.print_json(
+                        data={
+                            "success": False,
+                            "error": error_msg,
+                            "exit_code": EXIT_MISSING_TOKEN,
+                        }
+                    )
                 else:
                     console.print(f"\n[red]❌ {error_msg}[/red]")
                 raise typer.Exit(EXIT_MISSING_TOKEN)
@@ -1049,19 +1150,29 @@ def verify_github(
                 resolved_owner = await _resolve_owner_to_username(owner, github_token)
             except ValueError as e:
                 if json_output:
-                    console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_INVALID_INPUT})
+                    console.print_json(
+                        data={
+                            "success": False,
+                            "error": str(e),
+                            "exit_code": EXIT_INVALID_INPUT,
+                        }
+                    )
                 else:
                     console.print(f"\n[red]❌ Error:[/red] {e}")
                 raise typer.Exit(EXIT_INVALID_INPUT) from e
 
             # Fetch user details
             user_details = None
-            async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
+            async with GitHubKeysClient(
+                token=github_token, api_url=api_url, graphql_url=graphql_url
+            ) as client:
                 user_details = await client.get_user_details(resolved_owner)
 
             # Verify key on GitHub
             if json_output:
-                async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
+                async with GitHubKeysClient(
+                    token=github_token, api_url=api_url, graphql_url=graphql_url
+                ) as client:
                     if detected_type == "gpg":
                         verification = await client.verify_gpg_key_registered(
                             username=resolved_owner,
@@ -1076,7 +1187,9 @@ def verify_github(
                         )
             else:
                 with console.status("[bold green]Verifying key on GitHub..."):
-                    async with GitHubKeysClient(token=github_token, api_url=api_url, graphql_url=graphql_url) as client:
+                    async with GitHubKeysClient(
+                        token=github_token, api_url=api_url, graphql_url=graphql_url
+                    ) as client:
                         if detected_type == "gpg":
                             verification = await client.verify_gpg_key_registered(
                                 username=resolved_owner,
@@ -1096,25 +1209,34 @@ def verify_github(
                 server_hostname = verification.server
                 if not server_hostname:
                     from urllib.parse import urlparse
+
                     parsed_url = urlparse(api_url)
                     # Extract just the hostname (e.g., "api.github.com" -> "github.com")
                     netloc = parsed_url.netloc if parsed_url.netloc else "github.com"
                     # For api.github.com, use github.com; for GHE, keep the hostname
-                    server_hostname = "github.com" if netloc == "api.github.com" else netloc.replace("api.", "")
+                    server_hostname = (
+                        "github.com"
+                        if netloc == "api.github.com"
+                        else netloc.replace("api.", "")
+                    )
 
                 result = {
                     "success": verification.key_registered,
                     "key_type": detected_type,
                     "key_id": key_id,
                     "owner_input": owner,
-                    "username": user_details.get("login") if user_details else resolved_owner,
+                    "username": user_details.get("login")
+                    if user_details
+                    else resolved_owner,
                     "email": user_details.get("email") if user_details else None,
                     "name": user_details.get("name") if user_details else None,
                     "server": server_hostname,
                     "service": "github",
                     "is_registered": verification.key_registered,
                     # Backward-compatible aliases for older JSON consumers
-                    "github_user": user_details.get("login") if user_details else resolved_owner,
+                    "github_user": user_details.get("login")
+                    if user_details
+                    else resolved_owner,
                     "key_registered": verification.key_registered,
                 }
                 console.print_json(data=result)
@@ -1123,8 +1245,19 @@ def verify_github(
                 from typing import Literal, cast
 
                 from .models import SignatureInfo
+
                 mock_signature = SignatureInfo(
-                    type=cast(Literal["gpg", "ssh", "unsigned", "lightweight", "invalid", "gpg-unverifiable"], detected_type),
+                    type=cast(
+                        Literal[
+                            "gpg",
+                            "ssh",
+                            "unsigned",
+                            "lightweight",
+                            "invalid",
+                            "gpg-unverifiable",
+                        ],
+                        detected_type,
+                    ),
                     verified=True,  # We're not verifying a signature, just checking registration
                     key_id=key_id if detected_type == "gpg" else None,
                     fingerprint=key_id if detected_type == "ssh" else None,
@@ -1132,8 +1265,11 @@ def verify_github(
                     signature_data=None,
                 )
                 _display_verification_result(
-                    verification, mock_signature, resolved_owner,
-                    platform="GitHub", github_user_details=user_details
+                    verification,
+                    mock_signature,
+                    resolved_owner,
+                    platform="GitHub",
+                    github_user_details=user_details,
                 )
 
             # Exit with appropriate code
@@ -1148,7 +1284,13 @@ def verify_github(
             raise
         except Exception as e:
             if json_output:
-                console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_UNEXPECTED_ERROR})
+                console.print_json(
+                    data={
+                        "success": False,
+                        "error": str(e),
+                        "exit_code": EXIT_UNEXPECTED_ERROR,
+                    }
+                )
             else:
                 console.print(f"\n[red]❌ Error:[/red] {e}")
                 if logger.isEnabledFor(logging.DEBUG):
@@ -1163,10 +1305,7 @@ def verify_github(
 
 @app.command()
 def detect(
-    tag_name: str = typer.Argument(
-        ...,
-        help="Name of the Git tag to analyze"
-    ),
+    tag_name: str = typer.Argument(..., help="Name of the Git tag to analyze"),
     repo_path: Path = typer.Option(
         ".",
         "--repo-path",
@@ -1195,6 +1334,7 @@ def detect(
     Example:
         tag-validate detect v1.0.0
     """
+
     async def _detect():
         try:
             # Suppress ALL logs when JSON output is requested
@@ -1321,20 +1461,20 @@ def _display_verification_result(
     # Build user information display using shared utility
     if platform == "Gerrit" and account:
         user_lines = format_user_details(
-            username=account.username,
-            email=account.email,
-            name=account.name
+            username=account.username, email=account.email, name=account.name
         )
     elif platform == "GitHub" and github_user_details:
         user_lines = format_user_details(
             username=github_user_details.get("login"),
             email=github_user_details.get("email"),
-            name=github_user_details.get("name")
+            name=github_user_details.get("name"),
         )
     else:
         user_lines = []
 
-    user_section = "\n".join(user_lines) if user_lines else f"  • {platform} User: {owner}"
+    user_section = (
+        "\n".join(user_lines) if user_lines else f"  • {platform} User: {owner}"
+    )
 
     # Build server display using shared utility
     service = "gerrit" if platform == "Gerrit" else "github"
@@ -1357,14 +1497,16 @@ def _display_verification_result(
         content_parts.append("")
         content_parts.append(server_line)
 
-    content_parts.extend([
-        "",
-        "[bold]Details:[/bold]",
-        details_section,
-        "",
-        f"[bold]{platform} User:[/bold]",
-        user_section,
-    ])
+    content_parts.extend(
+        [
+            "",
+            "[bold]Details:[/bold]",
+            details_section,
+            "",
+            f"[bold]{platform} User:[/bold]",
+            user_section,
+        ]
+    )
 
     content = "\n".join(content_parts)
 
@@ -1380,8 +1522,7 @@ def _display_verification_result(
 @app.command()
 def validate(
     version_string: str = typer.Argument(
-        ...,
-        help="Version string to validate (e.g., v1.2.3, 2024.01.15)"
+        ..., help="Version string to validate (e.g., v1.2.3, 2024.01.15)"
     ),
     require_type: str | None = typer.Option(
         None,
@@ -1436,7 +1577,7 @@ def validate(
             error_msg = "Version string is empty or null"
             info_msg = [
                 "version_string parameter is required but was not provided or is empty",
-                "Expected formats: 'v1.0.0' (SemVer), '2024.01.15' (CalVer), or other version strings"
+                "Expected formats: 'v1.0.0' (SemVer), '2024.01.15' (CalVer), or other version strings",
             ]
 
             if json_output:
@@ -1468,14 +1609,29 @@ def validate(
             if not result.is_valid:
                 # Create a successful result for unknown format
                 from tag_validate.models import VersionInfo
+
                 result = VersionInfo(
                     raw=version_string,
                     normalized=version_string,
                     version_type="other",
                     is_valid=True,
-                    has_prefix=version_string[0:1] in ("v", "V") if version_string else False,
-                    is_development=any(kw in version_string.lower() for kw in
-                        ["dev", "pre", "alpha", "beta", "rc", "snapshot", "nightly", "canary", "preview"]),
+                    has_prefix=version_string[0:1] in ("v", "V")
+                    if version_string
+                    else False,
+                    is_development=any(
+                        kw in version_string.lower()
+                        for kw in [
+                            "dev",
+                            "pre",
+                            "alpha",
+                            "beta",
+                            "rc",
+                            "snapshot",
+                            "nightly",
+                            "canary",
+                            "preview",
+                        ]
+                    ),
                     # SemVer fields (all None for other type)
                     major=None,
                     minor=None,
@@ -1536,40 +1692,54 @@ def validate(
 
             # Add type-specific fields
             if result.version_type == "semver":
-                output.update({
-                    "major": result.major,
-                    "minor": result.minor,
-                    "patch": result.patch,
-                    "prerelease": result.prerelease,
-                    "build_metadata": result.build_metadata,
-                })
+                output.update(
+                    {
+                        "major": result.major,
+                        "minor": result.minor,
+                        "patch": result.patch,
+                        "prerelease": result.prerelease,
+                        "build_metadata": result.build_metadata,
+                    }
+                )
             elif result.version_type == "calver":
-                output.update({
-                    "year": result.year,
-                    "month": result.month,
-                    "day": result.day,
-                    "micro": result.micro,
-                    "modifier": result.modifier,
-                })
+                output.update(
+                    {
+                        "year": result.year,
+                        "month": result.month,
+                        "day": result.day,
+                        "micro": result.micro,
+                        "modifier": result.modifier,
+                    }
+                )
             elif result.version_type == "both":
                 # For 'both' type, include SemVer fields from result and CalVer fields by re-parsing
                 validator = TagValidator()
-                calver_result = validator.validate_calver(result.normalized or result.raw)
+                calver_result = validator.validate_calver(
+                    result.normalized or result.raw
+                )
 
-                output.update({
-                    # SemVer fields from original result
-                    "major": result.major,
-                    "minor": result.minor,
-                    "patch": result.patch,
-                    "prerelease": result.prerelease,
-                    "build_metadata": result.build_metadata,
-                    # CalVer fields from re-parsing as CalVer
-                    "year": calver_result.year if calver_result.is_valid else None,
-                    "month": calver_result.month if calver_result.is_valid else None,
-                    "day": calver_result.day if calver_result.is_valid else None,
-                    "micro": calver_result.micro if calver_result.is_valid else None,
-                    "modifier": calver_result.modifier if calver_result.is_valid else None,
-                })
+                output.update(
+                    {
+                        # SemVer fields from original result
+                        "major": result.major,
+                        "minor": result.minor,
+                        "patch": result.patch,
+                        "prerelease": result.prerelease,
+                        "build_metadata": result.build_metadata,
+                        # CalVer fields from re-parsing as CalVer
+                        "year": calver_result.year if calver_result.is_valid else None,
+                        "month": calver_result.month
+                        if calver_result.is_valid
+                        else None,
+                        "day": calver_result.day if calver_result.is_valid else None,
+                        "micro": calver_result.micro
+                        if calver_result.is_valid
+                        else None,
+                        "modifier": calver_result.modifier
+                        if calver_result.is_valid
+                        else None,
+                    }
+                )
 
             if not result.is_valid:
                 output["errors"] = result.errors
@@ -1581,6 +1751,7 @@ def validate(
         # Write JSON to file if requested
         if json_file and not json_output:
             import json as json_module
+
             output = {
                 "success": result.is_valid,
                 "version": result.raw,
@@ -1592,21 +1763,25 @@ def validate(
 
             # Add type-specific fields
             if result.version_type == "semver":
-                output.update({
-                    "major": result.major,
-                    "minor": result.minor,
-                    "patch": result.patch,
-                    "prerelease": result.prerelease,
-                    "build_metadata": result.build_metadata,
-                })
+                output.update(
+                    {
+                        "major": result.major,
+                        "minor": result.minor,
+                        "patch": result.patch,
+                        "prerelease": result.prerelease,
+                        "build_metadata": result.build_metadata,
+                    }
+                )
             elif result.version_type == "calver":
-                output.update({
-                    "year": result.year,
-                    "month": result.month,
-                    "day": result.day,
-                    "micro": result.micro,
-                    "modifier": result.modifier,
-                })
+                output.update(
+                    {
+                        "year": result.year,
+                        "month": result.month,
+                        "day": result.day,
+                        "micro": result.micro,
+                        "modifier": result.modifier,
+                    }
+                )
 
             if not result.is_valid:
                 output["errors"] = result.errors
@@ -1614,7 +1789,7 @@ def validate(
             # Write to file
             try:
                 json_file.parent.mkdir(parents=True, exist_ok=True)
-                with json_file.open('w', encoding='utf-8') as f:
+                with json_file.open("w", encoding="utf-8") as f:
                     json_module.dump(output, f, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"Failed to write JSON to file {json_file}: {e}")
@@ -1642,8 +1817,7 @@ def validate(
 @app.command()
 def verify(
     tag_location: str = typer.Argument(
-        ...,
-        help="Tag location: tag name, or owner/repo@tag for remote"
+        ..., help="Tag location: tag name, or owner/repo@tag for remote"
     ),
     repo_path: Path = typer.Option(
         ".",
@@ -1846,6 +2020,7 @@ def verify(
         tag-validate verify my-tag --skip-version-validation \
           --require-github --owner user@example.com --token $GITHUB_TOKEN
     """
+
     async def _verify():
         nonlocal gerrit_username, gerrit_password
 
@@ -1862,12 +2037,14 @@ def verify(
                 ] + TAG_LOCATION_FORMAT_EXAMPLES
 
                 if json_output:
-                    console.print_json(data={
-                        "success": False,
-                        "tag_name": "",
-                        "error": error_msg,
-                        "info": info_messages
-                    })
+                    console.print_json(
+                        data={
+                            "success": False,
+                            "tag_name": "",
+                            "error": error_msg,
+                            "info": info_messages,
+                        }
+                    )
                 else:
                     console.print(f"[red]❌ Error:[/red] {error_msg}")
                     console.print("\n[yellow]Expected formats:[/yellow]")
@@ -1887,7 +2064,7 @@ def verify(
                 validate_signature_types(require_signed_types)
 
                 # Set config flags based on types
-                if 'unsigned' in require_signed_types:
+                if "unsigned" in require_signed_types:
                     config_require_unsigned = True
                     # If unsigned is mixed with other types, store all types
                     if len(require_signed_types) > 1:
@@ -1906,7 +2083,7 @@ def verify(
                 require_type_list = parse_multi_value_option(require_type)
                 validate_version_types(require_type_list)
                 # Filter out 'none' - it means no requirement
-                require_type_list = [t for t in require_type_list if t != 'none']
+                require_type_list = [t for t in require_type_list if t != "none"]
 
             # Parse require_owner option - multi-value support
             require_owner_list = []
@@ -1919,7 +2096,11 @@ def verify(
             # Resolve Gerrit credentials: CLI args > netrc > environment
             # This is done before parsing require_gerrit to ensure credentials
             # are available when Gerrit verification is requested
-            if require_gerrit and (not gerrit_username or not gerrit_password) and not no_netrc:
+            if (
+                require_gerrit
+                and (not gerrit_username or not gerrit_password)
+                and not no_netrc
+            ):
                 # Determine effective host for netrc lookup
                 if require_gerrit == "true":
                     # Auto-discovery pattern: we don't know the host yet,
@@ -1934,8 +2115,7 @@ def verify(
                         if netrc_path is None:
                             if not netrc_optional:
                                 error_msg = (
-                                    "No .netrc file found and "
-                                    "--netrc-required set"
+                                    "No .netrc file found and --netrc-required set"
                                 )
                                 if json_output:
                                     console.print_json(
@@ -1945,9 +2125,7 @@ def verify(
                                         }
                                     )
                                 else:
-                                    console.print(
-                                        f"[red]❌ {error_msg}[/red]"
-                                    )
+                                    console.print(f"[red]❌ {error_msg}[/red]")
                                 raise typer.Exit(EXIT_MISSING_CREDENTIALS)
                         else:
                             # Validate the file is parseable
@@ -1961,8 +2139,7 @@ def verify(
                     except NetrcParseError as e:
                         if not json_output:
                             console.print(
-                                f"[yellow]⚠️  Error parsing "
-                                f".netrc file: {e}[/yellow]"
+                                f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]"
                             )
                 else:
                     # Specific server provided
@@ -1980,15 +2157,21 @@ def verify(
                             if not gerrit_password:
                                 gerrit_password = netrc_creds.password
                             if not json_output:
-                                console.print("[dim]🔑 Using credentials from .netrc[/dim]")
+                                console.print(
+                                    "[dim]🔑 Using credentials from .netrc[/dim]"
+                                )
                     except NetrcParseError as e:
                         if not json_output:
-                            console.print(f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]")
+                            console.print(
+                                f"[yellow]⚠️  Error parsing .netrc file: {e}[/yellow]"
+                            )
                     except FileNotFoundError as exc:
                         if not netrc_optional:
                             error_msg = "No .netrc file found and --netrc-required set"
                             if json_output:
-                                console.print_json(data={"success": False, "error": error_msg})
+                                console.print_json(
+                                    data={"success": False, "error": error_msg}
+                                )
                             else:
                                 console.print(f"[red]❌ {error_msg}[/red]")
                             raise typer.Exit(EXIT_MISSING_CREDENTIALS) from exc
@@ -2046,26 +2229,39 @@ def verify(
                                 }
                             )
                         else:
-                            console.print(
-                                f"\n[red]❌ Error:[/red] {error_msg}"
-                            )
+                            console.print(f"\n[red]❌ Error:[/red] {error_msg}")
                         raise typer.Exit(EXIT_INVALID_INPUT)
 
             # Build configuration
             config = ValidationConfig(
-                require_semver=("semver" in require_type_list or "both" in require_type_list) if require_type_list else False,
-                require_calver=("calver" in require_type_list or "both" in require_type_list) if require_type_list else False,
+                require_semver=(
+                    "semver" in require_type_list or "both" in require_type_list
+                )
+                if require_type_list
+                else False,
+                require_calver=(
+                    "calver" in require_type_list or "both" in require_type_list
+                )
+                if require_type_list
+                else False,
                 require_signed=config_require_signed,
                 require_unsigned=config_require_unsigned,
-                allowed_signature_types=allowed_signature_types if require_signed else None,
+                allowed_signature_types=allowed_signature_types
+                if require_signed
+                else None,
                 require_github=config_require_github,
                 require_gerrit=config_require_gerrit,
                 gerrit_server=gerrit_server,
-                reject_development=reject_development if not skip_version_validation else False,
+                reject_development=reject_development
+                if not skip_version_validation
+                else False,
                 skip_version_validation=skip_version_validation,
                 allow_prefix=True,  # Default to allowing version prefixes
                 enforce_increment=enforce_increment,
-                require_branch=require_branch_value if require_branch_value and require_branch_value.lower() not in ("false", "no", "0") else None,
+                require_branch=require_branch_value
+                if require_branch_value
+                and require_branch_value.lower() not in ("false", "no", "0")
+                else None,
                 max_tag_age_minutes=max_tag_age_minutes,
                 require_latest=require_latest,
                 config_source="CLI",  # Mark as CLI-originated config
@@ -2085,10 +2281,18 @@ def verify(
             resolved_owner = None
             if owner:
                 try:
-                    resolved_owner = await _resolve_owner_to_username(owner, github_token)
+                    resolved_owner = await _resolve_owner_to_username(
+                        owner, github_token
+                    )
                 except ValueError as e:
                     if json_output:
-                        console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_INVALID_INPUT})
+                        console.print_json(
+                            data={
+                                "success": False,
+                                "error": str(e),
+                                "exit_code": EXIT_INVALID_INPUT,
+                            }
+                        )
                     else:
                         console.print(f"\n[red]❌ Error:[/red] {e}")
                     raise typer.Exit(EXIT_INVALID_INPUT) from e
@@ -2103,7 +2307,9 @@ def verify(
                         tag_location=normalized_location,
                         github_user=resolved_owner,
                         github_token=github_token,
-                        require_owners=require_owner_list if require_owner_list else None,
+                        require_owners=require_owner_list
+                        if require_owner_list
+                        else None,
                     )
                 else:
                     with console.status("[bold green]Validating tag..."):
@@ -2111,7 +2317,9 @@ def verify(
                             tag_location=normalized_location,
                             github_user=resolved_owner,
                             github_token=github_token,
-                            require_owners=require_owner_list if require_owner_list else None,
+                            require_owners=require_owner_list
+                            if require_owner_list
+                            else None,
                         )
             except Exception as e:
                 # Handle missing tag with permit_missing flag
@@ -2135,17 +2343,24 @@ def verify(
                     if json_output:
                         console.print_json(data=output)
                     else:
-                        console.print("\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]")
+                        console.print(
+                            "\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]"
+                        )
 
                     # Write JSON to file if requested
                     if json_file:
                         import json as json_module
+
                         try:
                             json_file.parent.mkdir(parents=True, exist_ok=True)
-                            with json_file.open('w', encoding='utf-8') as f:
-                                json_module.dump(output, f, indent=2, ensure_ascii=False)
+                            with json_file.open("w", encoding="utf-8") as f:
+                                json_module.dump(
+                                    output, f, indent=2, ensure_ascii=False
+                                )
                         except Exception as file_error:
-                            logger.error(f"Failed to write JSON to file {json_file}: {file_error}")
+                            logger.error(
+                                f"Failed to write JSON to file {json_file}: {file_error}"
+                            )
 
                     raise typer.Exit(0) from None
                 else:
@@ -2176,17 +2391,24 @@ def verify(
                     if json_output:
                         console.print_json(data=output)
                     else:
-                        console.print("\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]")
+                        console.print(
+                            "\n[yellow]⚠️  Tag not found, but permit_missing=true[/yellow]"
+                        )
 
                     # Write JSON to file if requested
                     if json_file:
                         import json as json_module
+
                         try:
                             json_file.parent.mkdir(parents=True, exist_ok=True)
-                            with json_file.open('w', encoding='utf-8') as f:
-                                json_module.dump(output, f, indent=2, ensure_ascii=False)
+                            with json_file.open("w", encoding="utf-8") as f:
+                                json_module.dump(
+                                    output, f, indent=2, ensure_ascii=False
+                                )
                         except Exception as file_error:
-                            logger.error(f"Failed to write JSON to file {json_file}: {file_error}")
+                            logger.error(
+                                f"Failed to write JSON to file {json_file}: {file_error}"
+                            )
 
                     raise typer.Exit(0)
 
@@ -2195,11 +2417,21 @@ def verify(
                 output = {
                     "success": result.is_valid,
                     "tag_name": result.tag_name,
-                    "version_type": result.version_info.version_type if result.version_info else None,
-                    "signature_type": result.signature_info.type if result.signature_info else None,
-                    "signature_verified": result.signature_info.verified if result.signature_info else None,
-                    "development_tag": result.version_info.is_development if result.version_info else False,
-                    "version_prefix": result.version_info.has_prefix if result.version_info else False,
+                    "version_type": result.version_info.version_type
+                    if result.version_info
+                    else None,
+                    "signature_type": result.signature_info.type
+                    if result.signature_info
+                    else None,
+                    "signature_verified": result.signature_info.verified
+                    if result.signature_info
+                    else None,
+                    "development_tag": result.version_info.is_development
+                    if result.version_info
+                    else False,
+                    "version_prefix": result.version_info.has_prefix
+                    if result.version_info
+                    else False,
                     "errors": result.errors,
                     "warnings": result.warnings,
                     "info": result.info,
@@ -2273,15 +2505,28 @@ def verify(
             # Write JSON to file if requested
             if json_file:
                 import json as json_module
+
                 output = {
                     "success": result.is_valid,
                     "tag_name": result.tag_name,
-                    "version_type": result.version_info.version_type if result.version_info else None,
-                    "signature_type": result.signature_info.type if result.signature_info else None,
-                    "signature_verified": result.signature_info.verified if result.signature_info else None,
-                    "key_registered": result.key_verifications[0].key_registered if result.key_verifications else None,
-                    "development_tag": result.version_info.is_development if result.version_info else False,
-                    "version_prefix": result.version_info.has_prefix if result.version_info else False,
+                    "version_type": result.version_info.version_type
+                    if result.version_info
+                    else None,
+                    "signature_type": result.signature_info.type
+                    if result.signature_info
+                    else None,
+                    "signature_verified": result.signature_info.verified
+                    if result.signature_info
+                    else None,
+                    "key_registered": result.key_verifications[0].key_registered
+                    if result.key_verifications
+                    else None,
+                    "development_tag": result.version_info.is_development
+                    if result.version_info
+                    else False,
+                    "version_prefix": result.version_info.has_prefix
+                    if result.version_info
+                    else False,
                     "errors": result.errors,
                     "warnings": result.warnings,
                     "info": result.info,
@@ -2352,7 +2597,7 @@ def verify(
                 # Write to file
                 try:
                     json_file.parent.mkdir(parents=True, exist_ok=True)
-                    with json_file.open('w', encoding='utf-8') as f:
+                    with json_file.open("w", encoding="utf-8") as f:
                         json_module.dump(output, f, indent=2, ensure_ascii=False)
                 except Exception as e:
                     logger.error(f"Failed to write JSON to file {json_file}: {e}")
@@ -2398,10 +2643,16 @@ def verify(
                 if "token" in error_messages and "github" in error_messages:
                     raise typer.Exit(EXIT_MISSING_TOKEN)
                 # Check for missing Gerrit credentials
-                elif "credentials not provided" in error_messages or "credentials required" in error_messages:
+                elif (
+                    "credentials not provided" in error_messages
+                    or "credentials required" in error_messages
+                ):
                     raise typer.Exit(EXIT_MISSING_CREDENTIALS)
                 # Check for invalid Gerrit credentials
-                elif "authentication failed" in error_messages or "invalid credentials" in error_messages:
+                elif (
+                    "authentication failed" in error_messages
+                    or "invalid credentials" in error_messages
+                ):
                     raise typer.Exit(EXIT_AUTH_FAILED)
                 else:
                     raise typer.Exit(EXIT_VALIDATION_FAILED)
@@ -2411,7 +2662,13 @@ def verify(
             raise
         except Exception as e:
             if json_output:
-                console.print_json(data={"success": False, "error": str(e), "exit_code": EXIT_UNEXPECTED_ERROR})
+                console.print_json(
+                    data={
+                        "success": False,
+                        "error": str(e),
+                        "exit_code": EXIT_UNEXPECTED_ERROR,
+                    }
+                )
             else:
                 console.print(f"\n[red]❌ Unexpected error:[/red] {e}")
                 if logger.isEnabledFor(logging.DEBUG):

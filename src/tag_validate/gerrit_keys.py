@@ -147,9 +147,7 @@ class GerritKeysClient:
         elif github_org:
             self.server = self._discover_server_from_github_org(github_org)
         else:
-            raise GerritKeysError(
-                "Either server or github_org must be provided"
-            )
+            raise GerritKeysError("Either server or github_org must be provided")
 
         # Store the resolved credentials for later access
         self._credentials: GerritCredentials | None = None
@@ -216,9 +214,7 @@ class GerritKeysClient:
         # Configure authentication
         if self.username and self.password:
             auth = HTTPBasicAuth(self.username, self.password)
-            self.logger.debug(
-                f"Using HTTP Basic Auth for user: {self.username}"
-            )
+            self.logger.debug(f"Using HTTP Basic Auth for user: {self.username}")
         else:
             auth = Anonymous()
             self.logger.debug("Using anonymous access (no authentication)")
@@ -299,9 +295,7 @@ class GerritKeysClient:
         Raises:
             GerritServerError: If no working endpoint is found
         """
-        self.logger.debug(
-            f"Discovering API base URL for Gerrit server: {self.server}"
-        )
+        self.logger.debug(f"Discovering API base URL for Gerrit server: {self.server}")
 
         # Test common path patterns
         test_paths = [
@@ -313,6 +307,7 @@ class GerritKeysClient:
 
         # Test each potential path by trying to access /projects endpoint
         for path in test_paths:
+            # aislop-ignore-next-line ai-slop/hardcoded-url -- URL built from the configured Gerrit host, not a hardcoded endpoint
             base_url = f"https://{self.server}{path}"
             self.logger.debug(f"Testing API endpoint: {base_url}")
 
@@ -329,21 +324,16 @@ class GerritKeysClient:
                 )
 
                 if isinstance(result, dict) and len(result) > 0:
-                    self.logger.debug(
-                        f"Discovered working API base URL: {base_url}"
-                    )
+                    self.logger.debug(f"Discovered working API base URL: {base_url}")
                     return base_url
             except Exception as e:
-                self.logger.debug(
-                    f"Endpoint {base_url} failed: {e}"
-                )
+                self.logger.debug(f"Endpoint {base_url} failed: {e}")
                 continue
 
         # Default to /r/ if nothing works (most common pattern)
+        # aislop-ignore-next-line ai-slop/hardcoded-url -- URL built from the configured Gerrit host, not a hardcoded endpoint
         default_url = f"https://{self.server}/r"
-        self.logger.debug(
-            f"Using default endpoint: {default_url}"
-        )
+        self.logger.debug(f"Using default endpoint: {default_url}")
         return default_url
 
     async def verify_connection(self) -> tuple[bool, str | None]:
@@ -371,7 +361,9 @@ class GerritKeysClient:
             )
 
             if result:
-                self.logger.debug(f"Successfully connected to Gerrit server {self.server}")
+                self.logger.debug(
+                    f"Successfully connected to Gerrit server {self.server}"
+                )
                 return (True, None)
             else:
                 return (False, "Unable to retrieve server information")
@@ -385,37 +377,32 @@ class GerritKeysClient:
                     return (
                         False,
                         f"Invalid credentials: Gerrit server '{self.server}' rejected the provided credentials. "
-                        f"The username or password may be incorrect."
+                        f"The username or password may be incorrect.",
                     )
                 else:
                     # No credentials provided
                     return (
                         False,
                         f"Credentials required: Gerrit server '{self.server}' requires authentication. "
-                        f"No username or password provided."
+                        f"No username or password provided.",
                     )
             elif status_code == 403:
                 return (
                     False,
                     f"Invalid credentials: Authentication failed for Gerrit server '{self.server}'. "
-                    f"The provided username or password is incorrect."
+                    f"The provided username or password is incorrect.",
                 )
             else:
                 return (
                     False,
-                    f"HTTP error {status_code} connecting to Gerrit server '{self.server}': {e}"
+                    f"HTTP error {status_code} connecting to Gerrit server '{self.server}': {e}",
                 )
 
         except Exception as e:
             self.logger.error(f"Error connecting to Gerrit server: {e}")
-            return (
-                False,
-                f"Failed to connect to Gerrit server '{self.server}': {e}"
-            )
+            return (False, f"Failed to connect to Gerrit server '{self.server}': {e}")
 
-    async def get_account_details(
-        self, account_id: int
-    ) -> GerritAccountInfo | None:
+    async def get_account_details(self, account_id: int) -> GerritAccountInfo | None:
         """
         Get detailed information about a Gerrit account.
 
@@ -470,16 +457,10 @@ class GerritKeysClient:
                 ) from e
 
         except Exception as e:
-            self.logger.error(
-                f"Error getting account details for ID {account_id}: {e}"
-            )
-            raise GerritServerError(
-                f"Failed to get account details: {e}"
-            ) from e
+            self.logger.error(f"Error getting account details for ID {account_id}: {e}")
+            raise GerritServerError(f"Failed to get account details: {e}") from e
 
-    async def lookup_account_by_email(
-        self, email: str
-    ) -> GerritAccountInfo | None:
+    async def lookup_account_by_email(self, email: str) -> GerritAccountInfo | None:
         """
         Look up a Gerrit account by email address.
 
@@ -527,9 +508,7 @@ class GerritKeysClient:
                 ) from e
 
         except Exception as e:
-            self.logger.error(
-                f"Error looking up account by email {email}: {e}"
-            )
+            self.logger.error(f"Error looking up account by email {email}: {e}")
             raise GerritServerError(f"Failed to lookup account: {e}") from e
 
     async def lookup_account_by_username(
@@ -582,14 +561,10 @@ class GerritKeysClient:
                 ) from e
 
         except Exception as e:
-            self.logger.error(
-                f"Error looking up account by username {username}: {e}"
-            )
+            self.logger.error(f"Error looking up account by username {username}: {e}")
             raise GerritServerError(f"Failed to lookup account: {e}") from e
 
-    async def get_account_ssh_keys(
-        self, account_id: int
-    ) -> list[GerritSSHKeyInfo]:
+    async def get_account_ssh_keys(self, account_id: int) -> list[GerritSSHKeyInfo]:
         """
         Get all SSH keys registered to a Gerrit account.
 
@@ -627,9 +602,7 @@ class GerritKeysClient:
                     )
                     keys.append(key_info)
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to parse SSH key data: {e}"
-                    )
+                    self.logger.warning(f"Failed to parse SSH key data: {e}")
                     continue
 
             return keys
@@ -664,16 +637,10 @@ class GerritKeysClient:
                 ) from e
 
         except Exception as e:
-            self.logger.error(
-                f"Error getting SSH keys for account {account_id}: {e}"
-            )
-            raise GerritServerError(
-                f"Failed to get SSH keys: {e}"
-            ) from e
+            self.logger.error(f"Error getting SSH keys for account {account_id}: {e}")
+            raise GerritServerError(f"Failed to get SSH keys: {e}") from e
 
-    async def get_account_gpg_keys(
-        self, account_id: int
-    ) -> list[GerritGPGKeyInfo]:
+    async def get_account_gpg_keys(self, account_id: int) -> list[GerritGPGKeyInfo]:
         """
         Get all GPG keys registered to a Gerrit account.
 
@@ -710,9 +677,7 @@ class GerritKeysClient:
                     )
                     keys.append(key_info)
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to parse GPG key data: {e}"
-                    )
+                    self.logger.warning(f"Failed to parse GPG key data: {e}")
                     continue
 
             return keys
@@ -747,12 +712,8 @@ class GerritKeysClient:
                 ) from e
 
         except Exception as e:
-            self.logger.error(
-                f"Error getting GPG keys for account {account_id}: {e}"
-            )
-            raise GerritServerError(
-                f"Failed to get GPG keys: {e}"
-            ) from e
+            self.logger.error(f"Error getting GPG keys for account {account_id}: {e}")
+            raise GerritServerError(f"Failed to get GPG keys: {e}") from e
 
     async def verify_ssh_key_registered(
         self,
@@ -774,9 +735,7 @@ class GerritKeysClient:
             account = await self.get_account_details(account_id)
 
             ssh_keys = await self.get_account_ssh_keys(account_id)
-            normalized_fingerprint = self._normalize_ssh_fingerprint(
-                fingerprint
-            )
+            normalized_fingerprint = self._normalize_ssh_fingerprint(fingerprint)
 
             for key in ssh_keys:
                 if key.valid and key.ssh_public_key:
@@ -786,7 +745,9 @@ class GerritKeysClient:
                     if key_fingerprint == normalized_fingerprint:
                         return KeyVerificationResult(
                             key_registered=True,
-                            username=(account.username or str(account_id)) if account else str(account_id),
+                            username=(account.username or str(account_id))
+                            if account
+                            else str(account_id),
                             user_enumerated=False,
                             key_info=key,
                             service="gerrit",
@@ -797,7 +758,9 @@ class GerritKeysClient:
 
             return KeyVerificationResult(
                 key_registered=False,
-                username=(account.username or str(account_id)) if account else str(account_id),
+                username=(account.username or str(account_id))
+                if account
+                else str(account_id),
                 user_enumerated=False,
                 key_info=None,
                 service="gerrit",
@@ -852,7 +815,9 @@ class GerritKeysClient:
                 ) or key.fingerprint.upper().endswith(normalized_key_id):
                     return KeyVerificationResult(
                         key_registered=True,
-                        username=(account.username or str(account_id)) if account else str(account_id),
+                        username=(account.username or str(account_id))
+                        if account
+                        else str(account_id),
                         user_enumerated=False,
                         key_info=key,
                         service="gerrit",
@@ -862,7 +827,9 @@ class GerritKeysClient:
                     )
             return KeyVerificationResult(
                 key_registered=False,
-                username=(account.username or str(account_id)) if account else str(account_id),
+                username=(account.username or str(account_id))
+                if account
+                else str(account_id),
                 user_enumerated=False,
                 key_info=None,
                 service="gerrit",
@@ -941,7 +908,5 @@ class GerritKeysClient:
             return fingerprint.lower()
 
         except Exception as e:
-            self.logger.warning(
-                f"Failed to calculate SSH fingerprint: {e}"
-            )
+            self.logger.warning(f"Failed to calculate SSH fingerprint: {e}")
             return ""

@@ -100,9 +100,7 @@ class RepoContext:
         env_server = os.environ.get("GITHUB_SERVER_URL", "")
         if env_api and env_server:
             server_host = (
-                re.sub(r"^https?://", "", env_server)
-                .split("/")[0]
-                .split(":")[0]
+                re.sub(r"^https?://", "", env_server).split("/")[0].split(":")[0]
             )
             if server_host.lower() == self.host.split(":")[0].lower():
                 return env_api
@@ -993,8 +991,7 @@ async def check_latest_commit(
         if not resolved:
             info.latest = None
             info.errors.append(
-                "require_latest was set but the default branch could "
-                "not be determined"
+                "require_latest was set but the default branch could not be determined"
             )
             return info
         branch = resolved

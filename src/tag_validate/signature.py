@@ -109,7 +109,9 @@ class SignatureDetector:
 
             # Check for SSH signature configuration error
             if "gpg.ssh.allowedSignersFile needs to be configured" in verify_output:
-                logger.debug("SSH signature detected but allowedSignersFile not configured")
+                logger.debug(
+                    "SSH signature detected but allowedSignersFile not configured"
+                )
                 # Still try to parse SSH signature from tag object
                 return await self._parse_ssh_signature(tag_name, verify_output)
 
@@ -119,11 +121,23 @@ class SignatureDetector:
                 return await self._parse_invalid_gpg_signature(tag_name, verify_output)
             elif "ERRSIG" in verify_output:
                 # GPG signature exists but key not available for verification
-                return await self._parse_unverifiable_gpg_signature(tag_name, verify_output)
-            elif "GOODSIG" in verify_output or "using RSA key" in verify_output or "using DSA key" in verify_output or "using ECDSA key" in verify_output or "using EdDSA key" in verify_output:
+                return await self._parse_unverifiable_gpg_signature(
+                    tag_name, verify_output
+                )
+            elif (
+                "GOODSIG" in verify_output
+                or "using RSA key" in verify_output
+                or "using DSA key" in verify_output
+                or "using ECDSA key" in verify_output
+                or "using EdDSA key" in verify_output
+            ):
                 # Valid GPG signature
                 return await self._parse_gpg_signature(tag_name, verify_output)
-            elif self.SSH_SIG_HEADER in verify_output or "ssh signature" in verify_output.lower() or 'Good "git" signature' in verify_output:
+            elif (
+                self.SSH_SIG_HEADER in verify_output
+                or "ssh signature" in verify_output.lower()
+                or 'Good "git" signature' in verify_output
+            ):
                 # SSH signature
                 return await self._parse_ssh_signature(tag_name, verify_output)
             else:
@@ -282,7 +296,9 @@ class SignatureDetector:
         # If allowedSignersFile error, we know there's a signature but can't verify it
         if "gpg.ssh.allowedSignersFile needs to be configured" in verify_output:
             is_valid = False
-            logger.debug("SSH signature present but cannot be verified without allowedSignersFile")
+            logger.debug(
+                "SSH signature present but cannot be verified without allowedSignersFile"
+            )
 
         # If we couldn't parse the structured output, try to get the tag object
         if not fingerprint:
@@ -365,13 +381,13 @@ class SignatureDetector:
         if match:
             signer_info = match.group(1)
             # Extract email from "Name <email>" format
-            email_match = re.search(r'<([^>]+)>', signer_info)
+            email_match = re.search(r"<([^>]+)>", signer_info)
             if email_match:
                 email = email_match.group(1)
                 logger.debug(f"Extracted GPG signer email: {email}")
                 return email
             # If no angle brackets, the whole thing might be an email
-            if '@' in signer_info:
+            if "@" in signer_info:
                 logger.debug(f"Extracted GPG signer email: {signer_info}")
                 return signer_info
 
@@ -383,10 +399,12 @@ class SignatureDetector:
                 if len(parts) >= 3:
                     user_info = parts[2]  # Everything after the key ID
                     # Extract email from "Name <email>" format
-                    email_match = re.search(r'<([^>]+)>', user_info)
+                    email_match = re.search(r"<([^>]+)>", user_info)
                     if email_match:
                         email = email_match.group(1)
-                        logger.debug(f"Extracted GPG signer email from GOODSIG: {email}")
+                        logger.debug(
+                            f"Extracted GPG signer email from GOODSIG: {email}"
+                        )
                         return email
 
         logger.debug("Could not extract GPG signer email")
@@ -414,7 +432,9 @@ class SignatureDetector:
                 parts = line.split()
                 if len(parts) >= 3:
                     fingerprint = parts[2]
-                    logger.debug(f"Extracted GPG fingerprint from VALIDSIG: {fingerprint}")
+                    logger.debug(
+                        f"Extracted GPG fingerprint from VALIDSIG: {fingerprint}"
+                    )
                     return fingerprint
 
         logger.debug("Could not extract GPG fingerprint")
@@ -474,8 +494,8 @@ class SignatureDetector:
                 )
 
                 # Look for the signer line which may contain key info
-                for line in show_result.stdout.split('\n'):
-                    if 'signer' in line.lower() or 'key' in line.lower():
+                for line in show_result.stdout.split("\n"):
+                    if "signer" in line.lower() or "key" in line.lower():
                         logger.debug(f"Found potential key line: {line}")
 
                 # Since we can't easily extract the public key from the signature,
@@ -534,13 +554,25 @@ class SignatureDetector:
         parsed: dict[str, str | bool] = {
             "raw_output": output,
             "has_signature": "signature" in output.lower(),
-            "is_valid": "GOODSIG" in output or "VALIDSIG" in output or 'Good "git" signature' in output,
+            "is_valid": "GOODSIG" in output
+            or "VALIDSIG" in output
+            or 'Good "git" signature' in output,
             "signature_type": "unknown",
         }
 
-        if "GOODSIG" in output or "using RSA key" in output or "using DSA key" in output or "using ECDSA key" in output or "using EdDSA key" in output:
+        if (
+            "GOODSIG" in output
+            or "using RSA key" in output
+            or "using DSA key" in output
+            or "using ECDSA key" in output
+            or "using EdDSA key" in output
+        ):
             parsed["signature_type"] = "gpg"
-        elif self.SSH_SIG_HEADER in output or "ssh signature" in output.lower() or 'Good "git" signature' in output:
+        elif (
+            self.SSH_SIG_HEADER in output
+            or "ssh signature" in output.lower()
+            or 'Good "git" signature' in output
+        ):
             parsed["signature_type"] = "ssh"
         elif "no signature found" in output.lower():
             parsed["signature_type"] = "unsigned"

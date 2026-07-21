@@ -254,9 +254,7 @@ class NetrcParser:
         # Process each line, preserving newline tokens
         for line in lines:
             # Replace quoted strings with placeholders
-            processed_line = self._QUOTED_STRING_PATTERN.sub(
-                replace_quoted, line
-            )
+            processed_line = self._QUOTED_STRING_PATTERN.sub(replace_quoted, line)
 
             # Split on whitespace
             raw_tokens = processed_line.split()
@@ -264,9 +262,7 @@ class NetrcParser:
             # Restore quoted strings and unescape
             for raw_token in raw_tokens:
                 if raw_token in placeholders:
-                    tokens.append(
-                        self._unescape_quoted_string(placeholders[raw_token])
-                    )
+                    tokens.append(self._unescape_quoted_string(placeholders[raw_token]))
                 elif "\x00QUOTED" in raw_token:
                     # Handle case where placeholder is part of larger token
                     processed_token = raw_token
@@ -555,8 +551,7 @@ def check_netrc_permissions(path: Path) -> bool:
     # Check if group or others have read permission
     if mode & (stat.S_IRGRP | stat.S_IROTH):
         log.warning(
-            "Netrc file %s has insecure permissions. "
-            "Consider running: chmod 600 %s",
+            "Netrc file %s has insecure permissions. Consider running: chmod 600 %s",
             path,
             path,
         )

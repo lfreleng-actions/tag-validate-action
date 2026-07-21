@@ -193,7 +193,9 @@ class TagOperations:
         try:
             # Build repository URL
             if token:
-                repo_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+                repo_url = (
+                    f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+                )
             else:
                 repo_url = f"https://github.com/{owner}/{repo}.git"
 
@@ -209,7 +211,13 @@ class TagOperations:
             # Fetch the specific tag
             logger.debug(f"Fetching tag {tag}")
             run_git(
-                ["git", "fetch", "--depth=1", "origin", f"refs/tags/{tag}:refs/tags/{tag}"],
+                [
+                    "git",
+                    "fetch",
+                    "--depth=1",
+                    "origin",
+                    f"refs/tags/{tag}:refs/tags/{tag}",
+                ],
                 cwd=temp_dir,
             )
 
@@ -274,10 +282,13 @@ class TagOperations:
         # Check if GITHUB_ACTION_PATH is set and look there
         if not signers_file:
             import os
+
             action_path = os.environ.get("GITHUB_ACTION_PATH")
             if action_path:
                 action_signers = Path(action_path) / ".ssh-allowed-signers"
-                logger.debug(f"Checking for signers file in action directory: {action_signers}")
+                logger.debug(
+                    f"Checking for signers file in action directory: {action_signers}"
+                )
                 if action_signers.exists():
                     signers_file = action_signers
                     source_description = "GitHub Action directory"
@@ -286,7 +297,9 @@ class TagOperations:
         # 3. Git config
         if not signers_file:
             try:
-                result = run_git(["git", "config", "--get", "gpg.ssh.allowedSignersFile"])
+                result = run_git(
+                    ["git", "config", "--get", "gpg.ssh.allowedSignersFile"]
+                )
                 if result.stdout.strip():
                     config_path = Path(result.stdout.strip()).expanduser()
                     if config_path.exists():
@@ -318,16 +331,22 @@ class TagOperations:
             dest_signers = repo_path / ".ssh-allowed-signers"
             logger.debug(f"Copying signers file from {signers_file} to {dest_signers}")
             shutil.copy2(signers_file, dest_signers)
-            logger.debug(f"Copied .ssh-allowed-signers from {source_description} to {repo_path}")
+            logger.debug(
+                f"Copied .ssh-allowed-signers from {source_description} to {repo_path}"
+            )
 
             logger.debug(f"Configuring git in {repo_path} to use .ssh-allowed-signers")
             run_git(
                 ["git", "config", "gpg.ssh.allowedSignersFile", ".ssh-allowed-signers"],
                 cwd=repo_path,
             )
-            logger.debug("Configured Git to use .ssh-allowed-signers for SSH verification")
+            logger.debug(
+                "Configured Git to use .ssh-allowed-signers for SSH verification"
+            )
         else:
-            logger.warning(f"No .ssh-allowed-signers file found in any fallback location (checked cwd: {Path.cwd()})")
+            logger.warning(
+                f"No .ssh-allowed-signers file found in any fallback location (checked cwd: {Path.cwd()})"
+            )
 
     def parse_tag_location(self, location: str) -> tuple[str, str, str]:
         """Parse a tag location string into components.
