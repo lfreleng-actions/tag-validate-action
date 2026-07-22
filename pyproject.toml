@@ -46,6 +46,7 @@ dependencies = [
   "cryptography>=46.0.3",     # SSH key parsing and crypto operations
   "packaging>=24.2",          # Version parsing utilities
   "pygerrit2>=2.0.15",        # Gerrit REST API client
+  "requests>=2.32.0",         # HTTP errors surfaced by pygerrit2
 ]
 
 [project.urls]

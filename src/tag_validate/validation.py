@@ -137,7 +137,9 @@ class TagValidator:
             return calver_result
 
         # Other format (doesn't match SemVer or CalVer) - still valid, just different type
-        logger.debug(f"Tag '{tag}' does not match SemVer or CalVer patterns - type: other")
+        logger.debug(
+            f"Tag '{tag}' does not match SemVer or CalVer patterns - type: other"
+        )
 
         # Detect if it has a version prefix
         has_prefix = tag[0:1] in ("v", "V") if tag else False
@@ -419,7 +421,9 @@ class TagValidator:
         for suffix in self.DEV_SUFFIXES:
             # Check for suffix in prerelease (e.g., -alpha, -beta.1)
             if f"-{suffix}" in tag_lower or f".{suffix}" in tag_lower:
-                logger.debug(f"Tag '{tag}' identified as development version (suffix: {suffix})")
+                logger.debug(
+                    f"Tag '{tag}' identified as development version (suffix: {suffix})"
+                )
                 return True
         return False
 
@@ -527,5 +531,7 @@ class TagValidator:
             else:
                 return 0
         except (InvalidVersion, ValueError) as e:
-            logger.warning(f"Cannot compare versions '{version1}' and '{version2}': {e}")
+            logger.warning(
+                f"Cannot compare versions '{version1}' and '{version2}': {e}"
+            )
             return None

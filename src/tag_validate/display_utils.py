@@ -9,7 +9,6 @@ consistent output across different commands and workflows.
 """
 
 
-
 def format_user_details(
     username: str | None = None,
     email: str | None = None,

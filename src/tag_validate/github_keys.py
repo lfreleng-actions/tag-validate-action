@@ -79,6 +79,7 @@ class GitHubKeysClient:
         # Extract server hostname from api_url (e.g., "api.github.com" -> "github.com")
         # For GitHub.com, use "github.com", for GHE use the hostname
         from urllib.parse import urlparse
+
         # Normalize scheme-less inputs (e.g. "api.github.com") so the host is
         # parsed from netloc rather than being treated as a path.
         normalized_url = api_url if "://" in api_url else f"https://{api_url}"
@@ -151,7 +152,9 @@ class GitHubKeysClient:
             response = await client.get(f"/users/{username}/gpg_keys")
 
             if not isinstance(response, list):
-                self.logger.error(f"Unexpected response type for GPG keys: {type(response)}")
+                self.logger.error(
+                    f"Unexpected response type for GPG keys: {type(response)}"
+                )
                 return []
 
             keys: list[GPGKeyInfo] = []
@@ -172,8 +175,12 @@ class GitHubKeysClient:
                                     if "email" in email
                                 ],
                                 can_sign=subkey_data.get("can_sign", False),
-                                can_encrypt_comms=subkey_data.get("can_encrypt_comms", False),
-                                can_encrypt_storage=subkey_data.get("can_encrypt_storage", False),
+                                can_encrypt_comms=subkey_data.get(
+                                    "can_encrypt_comms", False
+                                ),
+                                can_encrypt_storage=subkey_data.get(
+                                    "can_encrypt_storage", False
+                                ),
                                 can_certify=subkey_data.get("can_certify", False),
                                 created_at=subkey_data.get("created_at", ""),
                                 expires_at=subkey_data.get("expires_at"),
@@ -247,7 +254,9 @@ class GitHubKeysClient:
             response = await client.get(f"/users/{username}/ssh_signing_keys")
 
             if not isinstance(response, list):
-                self.logger.error(f"Unexpected response type for SSH keys: {type(response)}")
+                self.logger.error(
+                    f"Unexpected response type for SSH keys: {type(response)}"
+                )
                 return []
 
             keys: list[SSHKeyInfo] = []
@@ -324,7 +333,8 @@ class GitHubKeysClient:
                         service="github",
                         server=self.server,
                         user_name=user_details.get("name") if user_details else None,
-                        user_email=signer_email or user_details.get("email") if user_details else None,
+                        user_email=signer_email
+                        or (user_details.get("email") if user_details else None),
                     )
 
                 # Check subkeys if enabled
@@ -341,8 +351,13 @@ class GitHubKeysClient:
                                 key_info=key,  # Return the primary key info, not the subkey
                                 service="github",
                                 server=self.server,
-                                user_name=user_details.get("name") if user_details else None,
-                                user_email=signer_email or user_details.get("email") if user_details else None,
+                                user_name=user_details.get("name")
+                                if user_details
+                                else None,
+                                user_email=signer_email
+                                or (
+                                    user_details.get("email") if user_details else None
+                                ),
                             )
 
             # Key not found
@@ -355,7 +370,8 @@ class GitHubKeysClient:
                 service="github",
                 server=self.server,
                 user_name=user_details.get("name") if user_details else None,
-                user_email=signer_email or user_details.get("email") if user_details else None,
+                user_email=signer_email
+                or (user_details.get("email") if user_details else None),
             )
 
         except Exception as e:
@@ -415,8 +431,11 @@ class GitHubKeysClient:
                             key_info=key,
                             service="github",
                             server=self.server,
-                            user_name=user_details.get("name") if user_details else None,
-                            user_email=signer_email or user_details.get("email") if user_details else None,
+                            user_name=user_details.get("name")
+                            if user_details
+                            else None,
+                            user_email=signer_email
+                            or (user_details.get("email") if user_details else None),
                         )
                 else:
                     # Direct key comparison (if full public key provided)
@@ -428,12 +447,17 @@ class GitHubKeysClient:
                             key_info=key,
                             service="github",
                             server=self.server,
-                            user_name=user_details.get("name") if user_details else None,
-                            user_email=signer_email or user_details.get("email") if user_details else None,
+                            user_name=user_details.get("name")
+                            if user_details
+                            else None,
+                            user_email=signer_email
+                            or (user_details.get("email") if user_details else None),
                         )
 
             # Key not found
-            self.logger.debug(f"SSH key with fingerprint {public_key_fingerprint} not registered to {username}")
+            self.logger.debug(
+                f"SSH key with fingerprint {public_key_fingerprint} not registered to {username}"
+            )
             return KeyVerificationResult(
                 key_registered=False,
                 username=username,
@@ -442,7 +466,8 @@ class GitHubKeysClient:
                 service="github",
                 server=self.server,
                 user_name=user_details.get("name") if user_details else None,
-                user_email=signer_email or user_details.get("email") if user_details else None,
+                user_email=signer_email
+                or (user_details.get("email") if user_details else None),
             )
 
         except Exception as e:
@@ -463,24 +488,26 @@ class GitHubKeysClient:
 
         try:
             # Write the public key to a temporary file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.pub', delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".pub", delete=False
+            ) as f:
                 f.write(public_key.strip())
                 temp_file = f.name
 
             try:
                 # Use ssh-keygen to calculate fingerprint
                 result = subprocess.run(
-                    ['ssh-keygen', '-lf', temp_file],
+                    ["ssh-keygen", "-lf", temp_file],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
                 )
 
                 # Parse output: "256 SHA256:fingerprint comment (TYPE)"
                 output = result.stdout.strip()
                 parts = output.split()
                 for part in parts:
-                    if part.startswith('SHA256:'):
+                    if part.startswith("SHA256:"):
                         return part
 
                 return None
@@ -513,7 +540,9 @@ class GitHubKeysClient:
             response = await client.get(f"/users/{username}")
 
             if not isinstance(response, dict):
-                self.logger.debug(f"Unexpected response type for user details: {type(response)}")
+                self.logger.debug(
+                    f"Unexpected response type for user details: {type(response)}"
+                )
                 return None
 
             return {
@@ -553,12 +582,13 @@ class GitHubKeysClient:
         try:
             # Use commit search API to find commits by this email
             response = await client.get(
-                "/search/commits",
-                params={"q": f"author-email:{email}"}
+                "/search/commits", params={"q": f"author-email:{email}"}
             )
 
             if not isinstance(response, dict):
-                self.logger.debug(f"Unexpected response type from commit search: {type(response)}")
+                self.logger.debug(
+                    f"Unexpected response type from commit search: {type(response)}"
+                )
                 return None
 
             items = response.get("items", [])
@@ -571,7 +601,9 @@ class GitHubKeysClient:
             if author and "login" in author:
                 username = author["login"]
                 if isinstance(username, str):
-                    self.logger.debug(f"Found GitHub username '{username}' for email {email}")
+                    self.logger.debug(
+                        f"Found GitHub username '{username}' for email {email}"
+                    )
                     return username
 
             self.logger.debug(f"No author information in commit for email: {email}")
@@ -619,7 +651,9 @@ class GitHubKeysClient:
             response = await client.get(f"/repos/{owner}/{repo}/commits/{ref}")
 
             if not isinstance(response, dict):
-                self.logger.error(f"Unexpected response type for commit: {type(response)}")
+                self.logger.error(
+                    f"Unexpected response type for commit: {type(response)}"
+                )
                 return None
 
             commit_data = response.get("commit", {})

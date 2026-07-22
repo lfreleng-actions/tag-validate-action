@@ -31,6 +31,7 @@ try:
 except ImportError:
     # Fall back to importlib.metadata if _version.py doesn't exist
     from importlib.metadata import PackageNotFoundError, version
+
     try:
         __version__ = version("tag-validate")
     except PackageNotFoundError:

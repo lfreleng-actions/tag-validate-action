@@ -93,7 +93,9 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
                         components += f"-{result.version_info.prerelease}"
                     if result.version_info.build_metadata:
                         components += f"+{result.version_info.build_metadata}"
-                    markdown_lines.append(f"| **Version Components** | `{components}` |")
+                    markdown_lines.append(
+                        f"| **Version Components** | `{components}` |"
+                    )
                 elif version_type == "calver":
                     components_parts = []
                     if result.version_info.year:
@@ -106,10 +108,16 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
                         components_parts.append(str(result.version_info.micro))
                     if components_parts:
                         components = ".".join(components_parts)
-                        markdown_lines.append(f"| **Version Components** | `{components}` |")
+                        markdown_lines.append(
+                            f"| **Version Components** | `{components}` |"
+                        )
 
-            markdown_lines.append(f"| **Development Tag** | `{str(result.version_info.is_development).lower()}` |")
-            markdown_lines.append(f"| **Version Prefix** | `{str(result.version_info.has_prefix).lower()}` |")
+            markdown_lines.append(
+                f"| **Development Tag** | `{str(result.version_info.is_development).lower()}` |"
+            )
+            markdown_lines.append(
+                f"| **Version Prefix** | `{str(result.version_info.has_prefix).lower()}` |"
+            )
 
         # Signature Information
         if result.signature_info:
@@ -117,31 +125,49 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
             markdown_lines.append(f"| **Signature Type** | `{sig_type.upper()}` |")
 
             if result.signature_info.signer_email:
-                markdown_lines.append(f"| **Signer Email** | `{result.signature_info.signer_email}` |")
+                markdown_lines.append(
+                    f"| **Signer Email** | `{result.signature_info.signer_email}` |"
+                )
 
             if result.signature_info.key_id:
-                markdown_lines.append(f"| **Key ID** | `{result.signature_info.key_id}` |")
+                markdown_lines.append(
+                    f"| **Key ID** | `{result.signature_info.key_id}` |"
+                )
 
             if result.signature_info.fingerprint:
-                markdown_lines.append(f"| **Fingerprint** | `{result.signature_info.fingerprint}` |")
+                markdown_lines.append(
+                    f"| **Fingerprint** | `{result.signature_info.fingerprint}` |"
+                )
 
-            markdown_lines.append(f"| **Signature Verified** | `{str(result.signature_info.verified).lower()}` |")
+            markdown_lines.append(
+                f"| **Signature Verified** | `{str(result.signature_info.verified).lower()}` |"
+            )
 
         # Key verifications (GitHub and/or Gerrit from key_verifications list)
         if result.key_verifications:
             for verification in result.key_verifications:
                 service_name = verification.service.capitalize()
-                markdown_lines.append(f"| **{service_name} Registered** | `{str(verification.key_registered).lower()}` |")
+                markdown_lines.append(
+                    f"| **{service_name} Registered** | `{str(verification.key_registered).lower()}` |"
+                )
 
                 if verification.server:
-                    markdown_lines.append(f"| **{service_name} Server** | `{verification.server}` |")
+                    markdown_lines.append(
+                        f"| **{service_name} Server** | `{verification.server}` |"
+                    )
 
                 if verification.username:
-                    markdown_lines.append(f"| **{service_name} Username** | `{verification.username}` |")
+                    markdown_lines.append(
+                        f"| **{service_name} Username** | `{verification.username}` |"
+                    )
                 if verification.user_email:
-                    markdown_lines.append(f"| **{service_name} Email** | `{verification.user_email}` |")
+                    markdown_lines.append(
+                        f"| **{service_name} Email** | `{verification.user_email}` |"
+                    )
                 if verification.user_name:
-                    markdown_lines.append(f"| **{service_name} Name** | `{verification.user_name}` |")
+                    markdown_lines.append(
+                        f"| **{service_name} Name** | `{verification.user_name}` |"
+                    )
 
         # Increment enforcement result
         if result.increment_check and result.increment_check.checked:
@@ -151,17 +177,25 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
             if len(result.increment_check.latest_tags) > 1:
                 # Multi-scheme push: report each scheme's baseline
                 for scheme, tag in sorted(result.increment_check.latest_tags.items()):
-                    markdown_lines.append(f"| **Latest Existing Tag ({scheme})** | `{tag}` |")
+                    markdown_lines.append(
+                        f"| **Latest Existing Tag ({scheme})** | `{tag}` |"
+                    )
             elif result.increment_check.latest_tag:
-                markdown_lines.append(f"| **Latest Existing Tag** | `{result.increment_check.latest_tag}` |")
+                markdown_lines.append(
+                    f"| **Latest Existing Tag** | `{result.increment_check.latest_tag}` |"
+                )
 
         # Branch containment result
         if result.branch_check and result.branch_check.checked:
             # Indeterminate (None) fails closed, so report it as false
             contains = bool(result.branch_check.contains)
-            markdown_lines.append(f"| **On Required Branch** | `{str(contains).lower()}` |")
+            markdown_lines.append(
+                f"| **On Required Branch** | `{str(contains).lower()}` |"
+            )
             if result.branch_check.branch:
-                markdown_lines.append(f"| **Required Branch** | `{result.branch_check.branch}` |")
+                markdown_lines.append(
+                    f"| **Required Branch** | `{result.branch_check.branch}` |"
+                )
 
         # Tag age (freshness) result
         if result.age_check and result.age_check.checked:
@@ -179,7 +213,9 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
             latest = bool(result.latest_check.latest)
             markdown_lines.append(f"| **Latest Commit** | `{str(latest).lower()}` |")
             if result.latest_check.branch:
-                markdown_lines.append(f"| **Target Branch** | `{result.latest_check.branch}` |")
+                markdown_lines.append(
+                    f"| **Target Branch** | `{result.latest_check.branch}` |"
+                )
 
         markdown_lines.append("")
 

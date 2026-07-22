@@ -121,7 +121,9 @@ class ValidationWorkflow:
         self.gerrit_username = gerrit_username
         self.gerrit_password = gerrit_password
         self.use_netrc = use_netrc
-        self.netrc_file = Path(netrc_file) if isinstance(netrc_file, str) else netrc_file
+        self.netrc_file = (
+            Path(netrc_file) if isinstance(netrc_file, str) else netrc_file
+        )
 
         # Initialize components
         self.validator: TagValidator = TagValidator()
@@ -140,7 +142,9 @@ class ValidationWorkflow:
         Security: Password is never exposed in string representation.
         """
         password_status = "set" if self.gerrit_password else "not set"
-        username_display = repr(self.gerrit_username) if self.gerrit_username else "None"
+        username_display = (
+            repr(self.gerrit_username) if self.gerrit_username else "None"
+        )
         return (
             f"ValidationWorkflow(config={self.config!r}, "
             f"repo_path={self.repo_path}, "
@@ -151,7 +155,9 @@ class ValidationWorkflow:
     async def _setup_ssh_allowed_signers(self) -> None:
         """Setup SSH allowed signers for the current repository."""
         try:
-            logger.debug(f"Setting up SSH allowed signers for repository: {self.repo_path}")
+            logger.debug(
+                f"Setting up SSH allowed signers for repository: {self.repo_path}"
+            )
             await self.operations._setup_ssh_allowed_signers(self.repo_path)
             # Verify the file was created
             signers_file = self.repo_path / ".ssh-allowed-signers"
@@ -220,15 +226,11 @@ class ValidationWorkflow:
             return result
 
         # Steps 2b-2e: Increment, branch, age, and latest gates
-        if not await self._run_gate_checks(
-            tag_name, tag_info, result, github_token
-        ):
+        if not await self._run_gate_checks(tag_name, tag_info, result, github_token):
             return result
 
         # Step 3: Detect and validate signature
-        signature_info = await self._run_signature_step(
-            result, tag_name, tag_info
-        )
+        signature_info = await self._run_signature_step(result, tag_name, tag_info)
         if signature_info is None:
             return result
 
@@ -244,9 +246,7 @@ class ValidationWorkflow:
 
         # Step 5: Verify key on Gerrit (if requested and signature exists)
         if self.config.require_gerrit:
-            await self._verify_gerrit_key_step(
-                result, signature_info, require_owners
-            )
+            await self._verify_gerrit_key_step(result, signature_info, require_owners)
 
         # Final validation summary
         if result.is_valid:
@@ -256,9 +256,7 @@ class ValidationWorkflow:
 
         return result
 
-    def _run_version_step(
-        self, result: ValidationResult, tag_name: str
-    ) -> bool:
+    def _run_version_step(self, result: ValidationResult, tag_name: str) -> bool:
         """Detect the version type and enforce type requirements.
 
         Args:
@@ -271,9 +269,7 @@ class ValidationWorkflow:
         """
         if self.config.skip_version_validation:
             # Skip version validation entirely (legacy flag support)
-            result.add_info(
-                "Version validation skipped (--skip-version-validation)"
-            )
+            result.add_info("Version validation skipped (--skip-version-validation)")
             return True
 
         version_result = self._validate_version(tag_name)
@@ -331,9 +327,8 @@ class ValidationWorkflow:
             return False
 
         # Step 2d: Require the tag to be recently created (if requested)
-        if (
-            self.config.max_tag_age_minutes is not None
-            and not self._check_tag_age(tag_name, tag_info, result)
+        if self.config.max_tag_age_minutes is not None and not self._check_tag_age(
+            tag_name, tag_info, result
         ):
             result.is_valid = False
             return False
@@ -403,6 +398,7 @@ class ValidationWorkflow:
         )
         try:
             from .github_keys import GitHubKeysClient
+
             async with GitHubKeysClient(token=github_token) as client:
                 detected = await client.lookup_username_by_email(
                     signature_info.signer_email
@@ -435,12 +431,8 @@ class ValidationWorkflow:
             github_token: GitHub API token (optional)
             require_owners: Required owners the key must belong to (optional)
         """
-        if not (
-            signature_info.type in ["gpg", "ssh"] and signature_info.verified
-        ):
-            result.add_info(
-                "Skipping GitHub key verification (no valid signature)"
-            )
+        if not (signature_info.type in ["gpg", "ssh"] and signature_info.verified):
+            result.add_info("Skipping GitHub key verification (no valid signature)")
             return
 
         if not github_token:
@@ -459,12 +451,18 @@ class ValidationWorkflow:
 
         if require_owners:
             await self._verify_github_owners(
-                result, signature_info, detected_user, github_token,
+                result,
+                signature_info,
+                detected_user,
+                github_token,
                 require_owners,
             )
         elif detected_user:
             await self._verify_github_single_user(
-                result, signature_info, detected_user, github_token,
+                result,
+                signature_info,
+                detected_user,
+                github_token,
                 was_user_enumerated,
             )
         else:
@@ -543,8 +541,7 @@ class ValidationWorkflow:
             if not key_result.key_registered:
                 result.is_valid = False
                 result.add_error(
-                    f"Signing key not registered to GitHub user "
-                    f"@{detected_user}"
+                    f"Signing key not registered to GitHub user @{detected_user}"
                 )
         except Exception as e:
             result.is_valid = False
@@ -607,8 +604,7 @@ class ValidationWorkflow:
         """
         lower_msg = error_msg.lower()
         is_endpoint_error = (
-            "endpoint not available" in lower_msg
-            or "may not support" in lower_msg
+            "endpoint not available" in lower_msg or "may not support" in lower_msg
         )
         # When --require-gerrit is specified, verification MUST succeed
         # Any server limitation means the requirement cannot be satisfied
@@ -636,9 +632,7 @@ class ValidationWorkflow:
             signature_info: Signature information
             require_owners: Required owners the key must belong to (optional)
         """
-        if not (
-            signature_info.type in ["gpg", "ssh"] and signature_info.verified
-        ):
+        if not (signature_info.type in ["gpg", "ssh"] and signature_info.verified):
             # When --require-gerrit is specified, a valid signature is REQUIRED
             result.is_valid = False
             result.add_error(
@@ -688,8 +682,7 @@ class ValidationWorkflow:
         except GerritMissingCredentialsError as e:
             error_msg = str(e)
             logger.warning(
-                f"Gerrit key verification unavailable: Missing credentials "
-                f"- {e}"
+                f"Gerrit key verification unavailable: Missing credentials - {e}"
             )
             result.is_valid = False
             result.add_error(
@@ -703,8 +696,7 @@ class ValidationWorkflow:
         except GerritInvalidCredentialsError as e:
             error_msg = str(e)
             logger.warning(
-                f"Gerrit key verification unavailable: Invalid credentials "
-                f"- {e}"
+                f"Gerrit key verification unavailable: Invalid credentials - {e}"
             )
             result.is_valid = False
             result.add_error(
@@ -742,7 +734,9 @@ class ValidationWorkflow:
             tag_name,
             repo_path=self.repo_path,
         )
-        logger.debug(f"Tag info fetched: {tag_info.tag_type}, commit: {tag_info.commit_sha[:8]}")
+        logger.debug(
+            f"Tag info fetched: {tag_info.tag_type}, commit: {tag_info.commit_sha[:8]}"
+        )
         return tag_info
 
     def _validate_version(self, tag_name: str) -> VersionInfo:
@@ -757,9 +751,8 @@ class ValidationWorkflow:
         logger.debug(f"Validating version: {tag_name}")
 
         # Use strict mode if configured
-        strict_semver = (
-            self.config.require_semver and
-            getattr(self.config, 'strict_semver', False)
+        strict_semver = self.config.require_semver and getattr(
+            self.config, "strict_semver", False
         )
 
         version_result = self.validator.validate_version(
@@ -807,7 +800,9 @@ class ValidationWorkflow:
             else:
                 # Single type - check if it matches at least one required type (OR logic)
                 if version_info.version_type not in required_types:
-                    logger.warning(f"Version type {version_info.version_type} does not match required types: {', '.join(required_types)}")
+                    logger.warning(
+                        f"Version type {version_info.version_type} does not match required types: {', '.join(required_types)}"
+                    )
                     return False
 
         # Check development version requirement
@@ -878,9 +873,7 @@ class ValidationWorkflow:
                     f"(previous highest: {check.latest_tag})"
                 )
             else:
-                result.add_info(
-                    "Tag is the first version tag in the repository"
-                )
+                result.add_info("Tag is the first version tag in the repository")
             return True
 
         for error in check.errors:
@@ -918,8 +911,7 @@ class ValidationWorkflow:
 
         require_branch = self.config.require_branch or ""
         logger.debug(
-            f"Checking branch containment for tag {tag_name} "
-            f"(branch: {require_branch})"
+            f"Checking branch containment for tag {tag_name} (branch: {require_branch})"
         )
 
         owner, repo = self._current_repo_context or (None, None)
@@ -944,24 +936,20 @@ class ValidationWorkflow:
                 errors=[f"Branch containment check failed: {e}"],
             )
             result.add_error(
-                f"Branch containment check failed for tag "
-                f"'{tag_name}': {e}"
+                f"Branch containment check failed for tag '{tag_name}': {e}"
             )
             return False
         result.branch_check = check
 
         if check.contains:
-            result.add_info(
-                f"Tag commit is reachable from branch '{check.branch}'"
-            )
+            result.add_info(f"Tag commit is reachable from branch '{check.branch}'")
             return True
 
         for error in check.errors:
             result.add_error(error)
         if not check.errors:
             result.add_error(
-                f"Tag '{tag_name}' commit is not reachable from "
-                f"branch '{check.branch}'"
+                f"Tag '{tag_name}' commit is not reachable from branch '{check.branch}'"
             )
         return False
 
@@ -985,10 +973,7 @@ class ValidationWorkflow:
         from .models import TagAgeCheckInfo
 
         max_age = self.config.max_tag_age_minutes or 0.0
-        logger.debug(
-            f"Checking tag age for {tag_name} "
-            f"(window: {max_age:g} minutes)"
-        )
+        logger.debug(f"Checking tag age for {tag_name} (window: {max_age:g} minutes)")
 
         try:
             check = check_tag_age(tag_info, max_age)
@@ -1002,17 +987,12 @@ class ValidationWorkflow:
                 max_age_minutes=max_age,
                 errors=[f"Tag age check failed: {e}"],
             )
-            result.add_error(
-                f"Tag age check failed for tag '{tag_name}': {e}"
-            )
+            result.add_error(f"Tag age check failed for tag '{tag_name}': {e}")
             return False
         result.age_check = check
 
         if check.recent:
-            result.add_info(
-                f"Tag was created within the last "
-                f"{max_age:g} minute(s)"
-            )
+            result.add_info(f"Tag was created within the last {max_age:g} minute(s)")
             return True
 
         for error in check.errors:
@@ -1054,10 +1034,7 @@ class ValidationWorkflow:
         # Reuse the branch gate's target when it names a concrete
         # branch; 'true' (or unset) auto-detects the default branch
         branch = self.config.require_branch or "true"
-        logger.debug(
-            f"Checking tag {tag_name} points to the tip of "
-            f"branch: {branch}"
-        )
+        logger.debug(f"Checking tag {tag_name} points to the tip of branch: {branch}")
 
         owner, repo = self._current_repo_context or (None, None)
         context = detect_repo_context(Path(self.repo_path), owner, repo)
@@ -1083,17 +1060,12 @@ class ValidationWorkflow:
                 tag_sha=tag_info.commit_sha,
                 errors=[f"Latest-commit check failed: {e}"],
             )
-            result.add_error(
-                f"Latest-commit check failed for tag '{tag_name}': {e}"
-            )
+            result.add_error(f"Latest-commit check failed for tag '{tag_name}': {e}")
             return False
         result.latest_check = check
 
         if check.latest:
-            result.add_info(
-                f"Tag commit is the current tip of branch "
-                f"'{check.branch}'"
-            )
+            result.add_info(f"Tag commit is the current tip of branch '{check.branch}'")
             return True
 
         for error in check.errors:
@@ -1105,7 +1077,9 @@ class ValidationWorkflow:
             )
         return False
 
-    async def _detect_signature(self, tag_name: str, tag_info: TagInfo) -> SignatureInfo:
+    async def _detect_signature(
+        self, tag_name: str, tag_info: TagInfo
+    ) -> SignatureInfo:
         """Detect signature on a tag.
 
         Args:
@@ -1122,8 +1096,14 @@ class ValidationWorkflow:
         signature_info = await self.detector.detect_signature(tag_name)
 
         # For SSH signatures, use tagger email as fallback if signer_email is not set
-        if signature_info.type == "ssh" and not signature_info.signer_email and tag_info.tagger_email:
-            logger.debug(f"Using tagger email as signer email for SSH signature: {tag_info.tagger_email}")
+        if (
+            signature_info.type == "ssh"
+            and not signature_info.signer_email
+            and tag_info.tagger_email
+        ):
+            logger.debug(
+                f"Using tagger email as signer email for SSH signature: {tag_info.tagger_email}"
+            )
             signature_info = SignatureInfo(
                 type=signature_info.type,
                 verified=signature_info.verified,
@@ -1174,11 +1154,11 @@ class ValidationWorkflow:
                 logger.warning(f"Invalid signature: key_id={signature_info.key_id}")
                 return False
             elif signature_info.type == "lightweight":
-                result.add_error("Lightweight tags are not allowed when signing requirements are specified")
+                result.add_error(
+                    "Lightweight tags are not allowed when signing requirements are specified"
+                )
                 logger.warning("Lightweight tag when signature requirements specified")
                 return False
-
-
 
         # Check if signature is required (legacy boolean mode)
         elif self.config.require_signed:
@@ -1307,9 +1287,7 @@ class ValidationWorkflow:
             try:
                 username = await client.lookup_username_by_email(owner)
                 if username:
-                    logger.debug(
-                        f"Found GitHub username for email {owner}: {username}"
-                    )
+                    logger.debug(f"Found GitHub username for email {owner}: {username}")
                     result = await self._verify_key_for_username(
                         client, signature_info, username
                     )
@@ -1322,9 +1300,7 @@ class ValidationWorkflow:
 
         logger.debug(f"Verifying key for GitHub username: {owner}")
         try:
-            result = await self._verify_key_for_username(
-                client, signature_info, owner
-            )
+            result = await self._verify_key_for_username(client, signature_info, owner)
             if result.key_registered:
                 logger.debug(f"Key verified for owner: {owner}")
                 return result
@@ -1359,14 +1335,14 @@ class ValidationWorkflow:
 
             async with GitHubKeysClient(token=github_token) as client:
                 for owner in require_owners:
-                    match = await self._match_owner_key(
-                        client, signature_info, owner
-                    )
+                    match = await self._match_owner_key(client, signature_info, owner)
                     if match is not None:
                         return match
 
                 # If we get here, none of the owners matched
-                logger.debug(f"Key not registered to any of the required owners: {require_owners}")
+                logger.debug(
+                    f"Key not registered to any of the required owners: {require_owners}"
+                )
                 return KeyVerificationResult(
                     key_registered=False,
                     username=", ".join(require_owners),
@@ -1439,7 +1415,9 @@ class ValidationWorkflow:
 
             # If require_owners is specified, check if account matches any owner
             if require_owners:
-                logger.debug(f"Verifying account against required owners: {require_owners}")
+                logger.debug(
+                    f"Verifying account against required owners: {require_owners}"
+                )
                 account_matches = False
 
                 for owner in require_owners:
@@ -1450,12 +1428,17 @@ class ValidationWorkflow:
                             break
                     else:
                         # Owner is a username
-                        if account.username and account.username.lower() == owner.lower():
+                        if (
+                            account.username
+                            and account.username.lower() == owner.lower()
+                        ):
                             account_matches = True
                             break
 
                 if not account_matches:
-                    logger.debug(f"Account {account.email} does not match required owners: {require_owners}")
+                    logger.debug(
+                        f"Account {account.email} does not match required owners: {require_owners}"
+                    )
                     return KeyVerificationResult(
                         key_registered=False,
                         username=", ".join(require_owners),
@@ -1487,7 +1470,9 @@ class ValidationWorkflow:
             else:
                 raise ValueError(f"Cannot verify {signature_info.type} signature type")
 
-            logger.debug(f"Gerrit key verification result: registered={result.key_registered}")
+            logger.debug(
+                f"Gerrit key verification result: registered={result.key_registered}"
+            )
             return result
 
     def _extract_github_org_from_context(self) -> str | None:
@@ -1501,8 +1486,10 @@ class ValidationWorkflow:
             GitHub organization name if detected, None otherwise
         """
         # First check if we have a stored GitHub org from remote validation
-        if hasattr(self, '_current_github_org') and self._current_github_org:
-            logger.debug(f"Using stored GitHub org from remote validation: {self._current_github_org}")
+        if hasattr(self, "_current_github_org") and self._current_github_org:
+            logger.debug(
+                f"Using stored GitHub org from remote validation: {self._current_github_org}"
+            )
             return self._current_github_org
 
         try:
@@ -1522,7 +1509,7 @@ class ValidationWorkflow:
                 # Parse GitHub URL patterns
                 patterns = [
                     r"github\.com[:/]([^/]+)/",  # https://github.com/owner/ or git@github.com:owner/
-                    r"github\.com/([^/]+)",      # https://github.com/owner (no trailing slash)
+                    r"github\.com/([^/]+)",  # https://github.com/owner (no trailing slash)
                 ]
 
                 for pattern in patterns:
@@ -1532,7 +1519,9 @@ class ValidationWorkflow:
                         logger.debug(f"Extracted GitHub org from remote URL: {org}")
                         return org
             else:
-                logger.debug(f"Git remote command failed with return code {result.returncode}")
+                logger.debug(
+                    f"Git remote command failed with return code {result.returncode}"
+                )
 
         except subprocess.TimeoutExpired as e:
             logger.debug(f"Git remote command timed out: {e}")
@@ -1600,6 +1589,7 @@ class ValidationWorkflow:
 
         # Check if it's a remote location or local tag
         from urllib.parse import urlparse
+
         parsed_host = urlparse(tag_location).hostname or ""
         is_github_host = parsed_host == "github.com" or parsed_host.endswith(
             ".github.com"
@@ -1609,17 +1599,13 @@ class ValidationWorkflow:
             return await self._validate_definite_remote(tag_location, request)
         if "/" in tag_location:
             # Ambiguous: local path or remote; try local first
-            return await self._validate_ambiguous_tag_location(
-                tag_location, request
-            )
+            return await self._validate_ambiguous_tag_location(tag_location, request)
         # No slash or @ - treat as local tag name in current repo
         return await self.validate_tag(
             tag_location, github_user, github_token, require_owners
         )
 
-    def _failed_result(
-        self, tag_name: str, error_msg: str
-    ) -> ValidationResult:
+    def _failed_result(self, tag_name: str, error_msg: str) -> ValidationResult:
         """Build a failed ValidationResult with a single error message.
 
         Args:
@@ -1666,6 +1652,7 @@ class ValidationWorkflow:
             ValidationResult: Result of validating the cloned tag.
         """
         from dependamerge.git_ops import secure_rmtree
+
         temp_dir, _tag_info = await self.operations.clone_remote_tag(
             owner=owner,
             repo=repo,
@@ -1723,7 +1710,11 @@ class ValidationWorkflow:
             owner, repo, tag = self.operations.parse_tag_location(tag_location)
             logger.debug(f"Parsed location: {owner}/{repo}@{tag}")
             return await self._clone_and_validate(
-                owner, repo, tag, request, set_org=True,
+                owner,
+                repo,
+                tag,
+                request,
+                set_org=True,
             )
         except Exception as e:
             logger.error(f"Failed to validate remote tag: {e}")
@@ -1733,8 +1724,7 @@ class ValidationWorkflow:
             # Provide helpful context
             if "parse_tag_location" in str(e):
                 result.add_info(
-                    "Expected format: 'owner/repo@tag' "
-                    "(e.g., 'torvalds/linux@v6.0')"
+                    "Expected format: 'owner/repo@tag' (e.g., 'torvalds/linux@v6.0')"
                 )
             return result
 
@@ -1762,8 +1752,11 @@ class ValidationWorkflow:
 
         if local_path.is_dir() and (local_path / ".git").exists():
             return await self._validate_local_repo_path(
-                tag_location, local_path, potential_repo_path,
-                potential_tag, request,
+                tag_location,
+                local_path,
+                potential_repo_path,
+                potential_tag,
+                request,
             )
         return await self._validate_remote_fallback(tag_location, request)
 
@@ -1788,8 +1781,7 @@ class ValidationWorkflow:
             ValidationResult: Complete validation result.
         """
         logger.debug(
-            f"Treating as local repo path: "
-            f"{potential_repo_path}/{potential_tag}"
+            f"Treating as local repo path: {potential_repo_path}/{potential_tag}"
         )
         # Capture before the try so except handlers can restore it
         original_repo_path = self.repo_path
@@ -1838,9 +1830,7 @@ class ValidationWorkflow:
         Returns:
             ValidationResult: Complete validation result.
         """
-        logger.debug(
-            f"Local path not found, treating as remote: {tag_location}"
-        )
+        logger.debug(f"Local path not found, treating as remote: {tag_location}")
         # Convert owner/repo/tag to owner/repo@tag if needed
         if tag_location.count("/") >= 2:
             parts = tag_location.rsplit("/", 1)
@@ -1849,12 +1839,14 @@ class ValidationWorkflow:
             normalized_location = tag_location
 
         try:
-            owner, repo, tag = self.operations.parse_tag_location(
-                normalized_location
-            )
+            owner, repo, tag = self.operations.parse_tag_location(normalized_location)
             logger.debug(f"Parsed as remote location: {owner}/{repo}@{tag}")
             return await self._clone_and_validate(
-                owner, repo, tag, request, set_org=False,
+                owner,
+                repo,
+                tag,
+                request,
+                set_org=False,
             )
         except Exception as e:
             logger.error(f"Failed to validate as remote tag: {e}")
@@ -2070,9 +2062,7 @@ class ValidationWorkflow:
         lines.append("")
         return lines
 
-    def _summary_key_verification_lines(
-        self, result: ValidationResult
-    ) -> list[str]:
+    def _summary_key_verification_lines(self, result: ValidationResult) -> list[str]:
         """Build the key-verification section of the summary."""
         if not result.key_verifications:
             return []
@@ -2112,9 +2102,7 @@ class ValidationWorkflow:
         # Collect all services shown in key_verifications section
         services_in_display: set[str] = set()
         if result.key_verifications:
-            services_in_display = {
-                k.service for k in result.key_verifications
-            }
+            services_in_display = {k.service for k in result.key_verifications}
 
         filtered_errors: list[str] = []
         for error in result.errors:
