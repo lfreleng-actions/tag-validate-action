@@ -72,6 +72,14 @@ dev = [
 [project.scripts]
 tag-validate = "tag_validate.cli:app"
 
+# Constrain transitive dependencies to enforce security floors without
+# adding them as direct dependencies.
+[tool.uv]
+constraint-dependencies = [
+  # CVE-2026-59890 (GHSA-h35f-9h28-mq5c): pulled in transitively via pbr
+  "setuptools>=83.0.0",
+]
+
 # Hatch dynamic versioning from VCS (tags)
 [tool.hatch.version]
 source = "vcs"
