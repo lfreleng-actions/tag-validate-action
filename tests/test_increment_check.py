@@ -3,9 +3,11 @@
 
 """Tests for tag increment and branch containment checks."""
 
+import logging
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -374,6 +376,23 @@ class TestDetectRepoContext:
         """No remote and no environment yields None."""
         assert detect_repo_context(git_repo) is None
 
+    def test_origin_read_failure_redacts_credentials(
+        self, git_repo, no_actions_env, monkeypatch, caplog
+    ):
+        """A failed origin URL read must never log embedded credentials."""
+        secret = "supersecrettoken"
+        url = f"https://user:{secret}@github.com/example-org/example-repo.git"
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError(f"fatal: unable to access '{url}'")
+
+        monkeypatch.setattr("tag_validate.increment_check.run_git", _boom)
+        with caplog.at_level(logging.DEBUG, logger="tag_validate.increment_check"):
+            assert detect_repo_context(git_repo) is None
+        logged = "\n".join(caplog.messages)
+        assert secret not in logged
+        assert "***" in logged
+
     def test_api_url_github_com(self, no_actions_env):
         """github.com maps to the public API endpoint."""
         context = RepoContext("github.com", "org", "repo")
@@ -506,6 +525,26 @@ class TestResolveDefaultBranch:
         """No API context and no origin yields None."""
         branch = await resolve_default_branch(git_repo)
         assert branch is None
+
+    @pytest.mark.asyncio
+    async def test_ls_remote_failure_redacts_credentials(
+        self, tmp_path, no_actions_env, monkeypatch, caplog
+    ):
+        """A failed ls-remote must never log embedded credentials."""
+        secret = "supersecrettoken"
+        url = f"https://user:{secret}@github.com/example-org/example-repo.git"
+
+        def fake_run_git(cmd, *args, **kwargs):
+            if "ls-remote" in cmd:
+                raise RuntimeError(f"fatal: unable to access '{url}'")
+            return SimpleNamespace(stdout="", returncode=1)
+
+        monkeypatch.setattr("tag_validate.increment_check.run_git", fake_run_git)
+        with caplog.at_level(logging.DEBUG, logger="tag_validate.increment_check"):
+            assert await resolve_default_branch(tmp_path) is None
+        logged = "\n".join(caplog.messages)
+        assert secret not in logged
+        assert "***" in logged
 
 
 class TestCheckBranchContainment:
@@ -945,3 +984,99 @@ class TestCheckLatestCommit:
 
         info = await check_latest_commit("v1.0.0", tip, "main", git_repo)
         assert info.latest is None
+
+
+class TestTokenForwarding:
+    """Network git operations receive the token out-of-band.
+
+    Regression tests for credential hygiene: authenticated network
+    operations (fetch/ls-remote) must receive the token via the
+    ``token`` kwarg of ``run_git`` (askpass-based) while the token
+    never appears in the command argv.
+    """
+
+    TOKEN = "ghp_" + "t" * 36
+
+    class _RecordingGit:
+        """run_git stand-in that records calls and fakes results."""
+
+        def __init__(self, stdout_map, fail_subcommands=()):
+            self.calls: list[tuple[list[str], dict]] = []
+            self._stdout_map = stdout_map
+            self._fail = set(fail_subcommands)
+
+        def __call__(self, args, **kwargs):
+            from types import SimpleNamespace
+
+            self.calls.append((list(args), kwargs))
+            sub = args[1]
+            return SimpleNamespace(
+                returncode=1 if sub in self._fail else 0,
+                stdout=self._stdout_map.get(sub, ""),
+                stderr="",
+            )
+
+        def kwargs_for(self, subcommand):
+            """Return kwargs of the first recorded call to a subcommand."""
+            for args, kwargs in self.calls:
+                if args[1] == subcommand:
+                    return kwargs
+            raise AssertionError(f"no '{subcommand}' call recorded")
+
+        def assert_argv_clean(self, secret):
+            """Assert the secret never appeared in any recorded argv."""
+            for args, _ in self.calls:
+                assert all(secret not in str(a) for a in args)
+
+    def test_tag_fetch_forwards_token(self, tmp_path, monkeypatch):
+        """_list_tags_via_git authenticates the tag fetch via kwarg."""
+        from tag_validate.increment_check import _list_tags_via_git
+
+        fake = self._RecordingGit({"remote": "origin\n", "tag": "v1.0.0\n"})
+        monkeypatch.setattr("tag_validate.increment_check.run_git", fake)
+
+        tags = _list_tags_via_git(tmp_path, self.TOKEN)
+
+        assert tags == ["v1.0.0"]
+        assert fake.kwargs_for("fetch")["token"] == self.TOKEN
+        fake.assert_argv_clean(self.TOKEN)
+
+    @pytest.mark.asyncio
+    async def test_default_branch_lookup_forwards_token(self, tmp_path, monkeypatch):
+        """resolve_default_branch authenticates ls-remote via kwarg."""
+        fake = self._RecordingGit(
+            {"ls-remote": "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"},
+            fail_subcommands={"symbolic-ref"},
+        )
+        monkeypatch.setattr("tag_validate.increment_check.run_git", fake)
+
+        branch = await resolve_default_branch(tmp_path, None, self.TOKEN)
+
+        assert branch == "main"
+        assert fake.kwargs_for("ls-remote")["token"] == self.TOKEN
+        fake.assert_argv_clean(self.TOKEN)
+
+    def test_branch_containment_fetch_forwards_token(self, tmp_path, monkeypatch):
+        """_git_branch_contains authenticates the branch fetch via kwarg."""
+        from tag_validate.increment_check import _git_branch_contains
+
+        fake = self._RecordingGit({}, fail_subcommands={"rev-parse"})
+        monkeypatch.setattr("tag_validate.increment_check.run_git", fake)
+
+        _git_branch_contains("abc123", "main", tmp_path, self.TOKEN)
+
+        assert fake.kwargs_for("fetch")["token"] == self.TOKEN
+        fake.assert_argv_clean(self.TOKEN)
+
+    def test_branch_tip_lookup_forwards_token(self, tmp_path, monkeypatch):
+        """_branch_tip_via_git authenticates ls-remote via kwarg."""
+        from tag_validate.increment_check import _branch_tip_via_git
+
+        fake = self._RecordingGit({"ls-remote": "abc123\trefs/heads/main\n"})
+        monkeypatch.setattr("tag_validate.increment_check.run_git", fake)
+
+        tip = _branch_tip_via_git("main", tmp_path, self.TOKEN)
+
+        assert tip == "abc123"
+        assert fake.kwargs_for("ls-remote")["token"] == self.TOKEN
+        fake.assert_argv_clean(self.TOKEN)

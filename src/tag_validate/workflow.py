@@ -33,9 +33,10 @@ Typical usage:
 
 import logging
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from dependamerge.git_ops import redact_text, run_git
 
 from .display_utils import format_server_display, format_user_details
 from .gerrit_keys import (
@@ -1493,18 +1494,19 @@ class ValidationWorkflow:
             return self._current_github_org
 
         try:
-            # Try to get remote URL from git repository
-            result = subprocess.run(
+            # Read the remote URL via the redacting git wrapper so any
+            # credential material embedded in the URL can never reach
+            # logs or exception messages.
+            result = run_git(
                 ["git", "remote", "get-url", "origin"],
                 cwd=self.repo_path,
-                capture_output=True,
-                text=True,
+                check=False,
                 timeout=5,
             )
 
             if result.returncode == 0:
                 remote_url = result.stdout.strip()
-                logger.debug(f"Found git remote URL: {remote_url}")
+                logger.debug(f"Found git remote URL: {redact_text(remote_url)}")
 
                 # Parse GitHub URL patterns
                 patterns = [
@@ -1523,12 +1525,14 @@ class ValidationWorkflow:
                     f"Git remote command failed with return code {result.returncode}"
                 )
 
-        except subprocess.TimeoutExpired as e:
-            logger.debug(f"Git remote command timed out: {e}")
-        except subprocess.SubprocessError as e:
-            logger.debug(f"Git subprocess error while extracting GitHub org: {e}")
         except Exception as e:
-            logger.debug(f"Could not extract GitHub org from git remote: {e}")
+            # Redact the exception text for defense-in-depth: if the git
+            # wrapper ever surfaces a remote URL with embedded credentials
+            # (e.g. from a legacy config) in its message, it must not reach
+            # the logs verbatim.
+            logger.debug(
+                f"Could not extract GitHub org from git remote: {redact_text(str(e))}"
+            )
 
         return None
 

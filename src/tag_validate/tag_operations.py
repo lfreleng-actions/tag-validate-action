@@ -191,13 +191,11 @@ class TagOperations:
         logger.debug(f"Created temp directory: {temp_dir}")
 
         try:
-            # Build repository URL
-            if token:
-                repo_url = (
-                    f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                )
-            else:
-                repo_url = f"https://github.com/{owner}/{repo}.git"
+            # Build a credential-free repository URL. Authentication is
+            # supplied per-operation via git askpass (see dependamerge
+            # git_ops), so the token never appears in argv or in the
+            # temp clone's .git/config.
+            repo_url = f"https://github.com/{owner}/{repo}.git"
 
             # Clone repository (shallow clone for efficiency)
             logger.debug(f"Cloning {owner}/{repo} to {temp_dir}")
@@ -206,6 +204,7 @@ class TagOperations:
                 dest=temp_dir,
                 depth=1,
                 branch=None,  # Clone default branch
+                token=token,
             )
 
             # Fetch the specific tag
@@ -219,6 +218,7 @@ class TagOperations:
                     f"refs/tags/{tag}:refs/tags/{tag}",
                 ],
                 cwd=temp_dir,
+                token=token,
             )
 
             # Setup SSH allowed signers with smart fallback

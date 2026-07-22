@@ -568,10 +568,18 @@ Release v1.0.0"""
                 "torvalds", "linux", "v6.0", token="secret_token"
             )
 
-            # Verify clone was called with token in URL
+            # Verify the token is passed out-of-band (askpass) and the
+            # clone URL stays free of credentials
             mock_clone.assert_called_once()
             call_args = mock_clone.call_args
-            assert "x-access-token:secret_token" in call_args.kwargs["url"]
+            assert call_args.kwargs["url"] == ("https://github.com/torvalds/linux.git")
+            assert "secret_token" not in call_args.kwargs["url"]
+            assert call_args.kwargs["token"] == "secret_token"
+
+            # The follow-up tag fetch authenticates the same way
+            fetch_call = mock_run_git.call_args_list[0]
+            assert fetch_call.kwargs["token"] == "secret_token"
+            assert all("secret_token" not in str(arg) for arg in fetch_call.args[0])
 
     @pytest.mark.asyncio
     async def test_clone_remote_tag_cleanup_on_error(self):
