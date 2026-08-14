@@ -16,13 +16,24 @@ Key features:
 - Get commit verification information from GitHub
 - Automatic rate limit handling
 - Comprehensive error handling
+
+Supporting code lives in sibling modules:
+
+- :mod:`tag_validate.github_keys_base` - configuration and connection
+- :mod:`tag_validate.github_keys_parsers` - response parsing helpers
+- :mod:`tag_validate.github_keys_lookup` - user and commit lookups
 """
 
 import logging
-import os
 
-from dependamerge.github_async import GitHubAsync
-
+from .github_keys_base import GitHubKeysClientBase, GitHubKeysError
+from .github_keys_lookup import GitHubUserLookupMixin
+from .github_keys_parsers import (
+    calculate_ssh_fingerprint,
+    is_key_expired,
+    parse_gpg_keys,
+    parse_ssh_keys,
+)
 from .models import (
     GitHubVerificationInfo,
     GPGKeyInfo,
@@ -33,13 +44,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-class GitHubKeysError(Exception):
-    """Raised when GitHub Keys API operations fail."""
-
-    pass
-
-
-class GitHubKeysClient:
+class GitHubKeysClient(GitHubUserLookupMixin):
     """
     Client for GitHub user keys APIs.
 
@@ -53,75 +58,6 @@ class GitHubKeysClient:
         ...         "octocat", "3262EFF25BA0D270"
         ...     )
     """
-
-    def __init__(
-        self,
-        token: str | None = None,
-        api_url: str = "https://api.github.com",
-        graphql_url: str = "https://api.github.com/graphql",
-        logger_instance: logging.Logger | None = None,
-    ):
-        """
-        Initialize GitHub keys client.
-
-        Args:
-            token: GitHub personal access token. If None, reads from GITHUB_TOKEN env var.
-            api_url: Base URL for GitHub REST API (for GitHub Enterprise Server).
-            graphql_url: GraphQL endpoint URL (for GitHub Enterprise Server).
-            logger_instance: Optional logger instance for client messages.
-        """
-        self.token = token or os.environ.get("GITHUB_TOKEN")
-        self.api_url = api_url
-        self.graphql_url = graphql_url
-        self.logger = logger_instance or logger
-        self._client: GitHubAsync | None = None
-
-        # Extract server hostname from api_url (e.g., "api.github.com" -> "github.com")
-        # For GitHub.com, use "github.com", for GHE use the hostname
-        from urllib.parse import urlparse
-
-        # Normalize scheme-less inputs (e.g. "api.github.com") so the host is
-        # parsed from netloc rather than being treated as a path.
-        normalized_url = api_url if "://" in api_url else f"https://{api_url}"
-        parsed = urlparse(normalized_url)
-        hostname = parsed.hostname or ""
-        if hostname == "api.github.com":
-            self.server = "github.com"
-        else:
-            # Extract host for GitHub Enterprise from netloc so any explicit
-            # port is preserved (e.g. ghe.example.com:8443), stripping any
-            # userinfo. Remove a leading 'api.' prefix if present
-            # (e.g. api.github.example.com -> github.example.com).
-            server = parsed.netloc.rsplit("@", 1)[-1]
-            if server.startswith("api."):
-                server = server[4:]
-            self.server = server
-
-    async def __aenter__(self) -> "GitHubKeysClient":
-        """Async context manager entry."""
-        self._client = GitHubAsync(
-            token=self.token,
-            api_url=self.api_url,
-            graphql_url=self.graphql_url,
-            logger=self.logger,
-        )
-        await self._client.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        if self._client:
-            await self._client.__aexit__(exc_type, exc_val, exc_tb)
-            self._client = None
-
-    def _ensure_client(self) -> GitHubAsync:
-        """Ensure client is initialized."""
-        if not self._client:
-            raise RuntimeError(
-                "GitHubKeysClient must be used as an async context manager. "
-                "Use 'async with GitHubKeysClient(...) as client:'"
-            )
-        return self._client
 
     async def get_user_gpg_keys(self, username: str) -> list[GPGKeyInfo]:
         """
@@ -157,67 +93,7 @@ class GitHubKeysClient:
                 )
                 return []
 
-            keys: list[GPGKeyInfo] = []
-            for key_data in response:
-                try:
-                    # Parse subkeys recursively
-                    subkeys = []
-                    for subkey_data in key_data.get("subkeys", []):
-                        try:
-                            subkey = GPGKeyInfo(
-                                id=subkey_data.get("id", 0),
-                                key_id=subkey_data.get("key_id", ""),
-                                name=subkey_data.get("name"),
-                                primary_key_id=subkey_data.get("primary_key_id"),
-                                emails=[
-                                    email["email"]
-                                    for email in subkey_data.get("emails", [])
-                                    if "email" in email
-                                ],
-                                can_sign=subkey_data.get("can_sign", False),
-                                can_encrypt_comms=subkey_data.get(
-                                    "can_encrypt_comms", False
-                                ),
-                                can_encrypt_storage=subkey_data.get(
-                                    "can_encrypt_storage", False
-                                ),
-                                can_certify=subkey_data.get("can_certify", False),
-                                created_at=subkey_data.get("created_at", ""),
-                                expires_at=subkey_data.get("expires_at"),
-                                revoked=subkey_data.get("revoked", False),
-                                raw_key=subkey_data.get("raw_key"),
-                                subkeys=[],  # Subkeys don't have subkeys
-                            )
-                            subkeys.append(subkey)
-                        except Exception as e:
-                            self.logger.warning(f"Failed to parse GPG subkey data: {e}")
-                            continue
-
-                    key_info = GPGKeyInfo(
-                        id=key_data.get("id", 0),
-                        key_id=key_data.get("key_id", ""),
-                        name=key_data.get("name"),
-                        primary_key_id=key_data.get("primary_key_id"),
-                        emails=[
-                            email["email"]
-                            for email in key_data.get("emails", [])
-                            if "email" in email
-                        ],
-                        can_sign=key_data.get("can_sign", False),
-                        can_encrypt_comms=key_data.get("can_encrypt_comms", False),
-                        can_encrypt_storage=key_data.get("can_encrypt_storage", False),
-                        can_certify=key_data.get("can_certify", False),
-                        created_at=key_data.get("created_at", ""),
-                        expires_at=key_data.get("expires_at"),
-                        revoked=key_data.get("revoked", False),
-                        raw_key=key_data.get("raw_key"),
-                        subkeys=subkeys,
-                    )
-                    keys.append(key_info)
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse GPG key data: {e}")
-                    continue
-
+            keys = parse_gpg_keys(response, self.logger)
             self.logger.debug(f"Found {len(keys)} GPG keys for user {username}")
             return keys
 
@@ -259,26 +135,61 @@ class GitHubKeysClient:
                 )
                 return []
 
-            keys: list[SSHKeyInfo] = []
-            for key_data in response:
-                try:
-                    key_info = SSHKeyInfo(
-                        id=key_data.get("id", 0),
-                        key=key_data.get("key", ""),
-                        title=key_data.get("title", ""),
-                        created_at=key_data.get("created_at", ""),
-                    )
-                    keys.append(key_info)
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse SSH key data: {e}")
-                    continue
-
+            keys = parse_ssh_keys(response, self.logger)
             self.logger.debug(f"Found {len(keys)} SSH signing keys for user {username}")
             return keys
 
         except Exception as e:
             self.logger.error(f"Failed to fetch SSH keys for {username}: {e}")
             raise
+
+    def _build_verification_result(
+        self,
+        username: str,
+        key_info: GPGKeyInfo | SSHKeyInfo | None,
+        user_details: dict | None,
+        signer_email: str | None,
+    ) -> KeyVerificationResult:
+        """Assemble a KeyVerificationResult for a (possibly absent) key match."""
+        return KeyVerificationResult(
+            key_registered=key_info is not None,
+            username=username,
+            user_enumerated=False,
+            key_info=key_info,
+            service="github",
+            server=self.server,
+            user_name=user_details.get("name") if user_details else None,
+            user_email=signer_email
+            or (user_details.get("email") if user_details else None),
+        )
+
+    def _find_gpg_key(
+        self,
+        user_keys: list[GPGKeyInfo],
+        normalized_key_id: str,
+        check_subkeys: bool,
+    ) -> GPGKeyInfo | None:
+        """Find the primary key matching a normalized key ID, if any.
+
+        A subkey match returns its primary key, matching GitHub's own
+        presentation of the key that owns the signature.
+        """
+        for key in user_keys:
+            # Check main key
+            if key.key_id.replace(" ", "").upper() == normalized_key_id:
+                return key
+
+            # Check subkeys if enabled
+            if not check_subkeys:
+                continue
+            for subkey in key.subkeys:
+                if subkey.key_id.replace(" ", "").upper() == normalized_key_id:
+                    self.logger.debug(
+                        f"Found matching subkey {subkey.key_id} under primary key {key.key_id}"
+                    )
+                    # Return the primary key info, not the subkey
+                    return key
+        return None
 
     async def verify_gpg_key_registered(
         self,
@@ -322,61 +233,39 @@ class GitHubKeysClient:
             # Normalize key_id for comparison (remove spaces, make uppercase)
             normalized_key_id = key_id.replace(" ", "").upper()
 
-            for key in user_keys:
-                # Check main key
-                if key.key_id.replace(" ", "").upper() == normalized_key_id:
-                    return KeyVerificationResult(
-                        key_registered=True,
-                        username=username,
-                        user_enumerated=False,
-                        key_info=key,
-                        service="github",
-                        server=self.server,
-                        user_name=user_details.get("name") if user_details else None,
-                        user_email=signer_email
-                        or (user_details.get("email") if user_details else None),
-                    )
+            matched = self._find_gpg_key(user_keys, normalized_key_id, check_subkeys)
+            if matched is None:
+                # Key not found
+                self.logger.debug(f"GPG key {key_id} not registered to {username}")
 
-                # Check subkeys if enabled
-                if check_subkeys:
-                    for subkey in key.subkeys:
-                        if subkey.key_id.replace(" ", "").upper() == normalized_key_id:
-                            self.logger.debug(
-                                f"Found matching subkey {subkey.key_id} under primary key {key.key_id}"
-                            )
-                            return KeyVerificationResult(
-                                key_registered=True,
-                                username=username,
-                                user_enumerated=False,
-                                key_info=key,  # Return the primary key info, not the subkey
-                                service="github",
-                                server=self.server,
-                                user_name=user_details.get("name")
-                                if user_details
-                                else None,
-                                user_email=signer_email
-                                or (
-                                    user_details.get("email") if user_details else None
-                                ),
-                            )
-
-            # Key not found
-            self.logger.debug(f"GPG key {key_id} not registered to {username}")
-            return KeyVerificationResult(
-                key_registered=False,
+            return self._build_verification_result(
                 username=username,
-                user_enumerated=False,
-                key_info=None,
-                service="github",
-                server=self.server,
-                user_name=user_details.get("name") if user_details else None,
-                user_email=signer_email
-                or (user_details.get("email") if user_details else None),
+                key_info=matched,
+                user_details=user_details,
+                signer_email=signer_email,
             )
 
         except Exception as e:
             self.logger.error(f"Error verifying GPG key: {e}")
             raise
+
+    async def _find_ssh_key(
+        self,
+        user_keys: list[SSHKeyInfo],
+        normalized_fp: str,
+        is_fingerprint: bool,
+    ) -> SSHKeyInfo | None:
+        """Find the SSH key matching a fingerprint or full public key, if any."""
+        for key in user_keys:
+            if is_fingerprint:
+                # Calculate fingerprint of the GitHub key and compare
+                key_fingerprint = await self._calculate_ssh_fingerprint(key.key)
+                if key_fingerprint and key_fingerprint == normalized_fp:
+                    return key
+            # Direct key comparison (if full public key provided)
+            elif normalized_fp in key.key or key.key in normalized_fp:
+                return key
+        return None
 
     async def verify_ssh_key_registered(
         self,
@@ -419,55 +308,18 @@ class GitHubKeysClient:
             # Check if input is a fingerprint (starts with SHA256:) or a public key
             is_fingerprint = normalized_fp.startswith("SHA256:")
 
-            for key in user_keys:
-                if is_fingerprint:
-                    # Calculate fingerprint of the GitHub key and compare
-                    key_fingerprint = await self._calculate_ssh_fingerprint(key.key)
-                    if key_fingerprint and key_fingerprint == normalized_fp:
-                        return KeyVerificationResult(
-                            key_registered=True,
-                            username=username,
-                            user_enumerated=False,
-                            key_info=key,
-                            service="github",
-                            server=self.server,
-                            user_name=user_details.get("name")
-                            if user_details
-                            else None,
-                            user_email=signer_email
-                            or (user_details.get("email") if user_details else None),
-                        )
-                else:
-                    # Direct key comparison (if full public key provided)
-                    if normalized_fp in key.key or key.key in normalized_fp:
-                        return KeyVerificationResult(
-                            key_registered=True,
-                            username=username,
-                            user_enumerated=False,
-                            key_info=key,
-                            service="github",
-                            server=self.server,
-                            user_name=user_details.get("name")
-                            if user_details
-                            else None,
-                            user_email=signer_email
-                            or (user_details.get("email") if user_details else None),
-                        )
+            matched = await self._find_ssh_key(user_keys, normalized_fp, is_fingerprint)
+            if matched is None:
+                # Key not found
+                self.logger.debug(
+                    f"SSH key with fingerprint {public_key_fingerprint} not registered to {username}"
+                )
 
-            # Key not found
-            self.logger.debug(
-                f"SSH key with fingerprint {public_key_fingerprint} not registered to {username}"
-            )
-            return KeyVerificationResult(
-                key_registered=False,
+            return self._build_verification_result(
                 username=username,
-                user_enumerated=False,
-                key_info=None,
-                service="github",
-                server=self.server,
-                user_name=user_details.get("name") if user_details else None,
-                user_email=signer_email
-                or (user_details.get("email") if user_details else None),
+                key_info=matched,
+                user_details=user_details,
+                signer_email=signer_email,
             )
 
         except Exception as e:
@@ -483,198 +335,7 @@ class GitHubKeysClient:
         Returns:
             Fingerprint in format "SHA256:..." or None if calculation fails
         """
-        import subprocess
-        import tempfile
-
-        try:
-            # Write the public key to a temporary file
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".pub", delete=False
-            ) as f:
-                f.write(public_key.strip())
-                temp_file = f.name
-
-            try:
-                # Use ssh-keygen to calculate fingerprint
-                result = subprocess.run(
-                    ["ssh-keygen", "-lf", temp_file],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-
-                # Parse output: "256 SHA256:fingerprint comment (TYPE)"
-                output = result.stdout.strip()
-                parts = output.split()
-                for part in parts:
-                    if part.startswith("SHA256:"):
-                        return part
-
-                return None
-            finally:
-                # Clean up temp file
-                os.unlink(temp_file)
-
-        except Exception as e:
-            self.logger.debug(f"Failed to calculate SSH fingerprint: {e}")
-            return None
-
-    async def get_user_details(self, username: str) -> dict | None:
-        """
-        Get detailed user information from GitHub.
-
-        Args:
-            username: GitHub username
-
-        Returns:
-            Dictionary with user details (login, name, email, etc.)
-            or None if user not found
-
-        Raises:
-            GitHubKeysError: If API request fails
-        """
-        client = self._ensure_client()
-
-        try:
-            # Get user details from GitHub API
-            response = await client.get(f"/users/{username}")
-
-            if not isinstance(response, dict):
-                self.logger.debug(
-                    f"Unexpected response type for user details: {type(response)}"
-                )
-                return None
-
-            return {
-                "login": response.get("login"),
-                "name": response.get("name"),
-                "email": response.get("email"),
-                "bio": response.get("bio"),
-                "company": response.get("company"),
-                "location": response.get("location"),
-            }
-
-        except Exception as e:
-            self.logger.debug(f"Error getting user details for {username}: {e}")
-            return None
-
-    async def lookup_username_by_email(self, email: str) -> str | None:
-        """Lookup GitHub username from email using commit search API.
-
-        This uses the GitHub Search API to find commits authored by the given
-        email address, then extracts the username from the commit author.
-
-        Args:
-            email: Email address to look up
-
-        Returns:
-            GitHub username if found, None otherwise
-
-        Example:
-            >>> username = await client.lookup_username_by_email("user@example.com")
-            >>> if username:
-            ...     print(f"Found username: {username}")
-        """
-        client = self._ensure_client()
-
-        self.logger.debug(f"Looking up GitHub username for email: {email}")
-
-        try:
-            # Use commit search API to find commits by this email
-            response = await client.get(
-                "/search/commits", params={"q": f"author-email:{email}"}
-            )
-
-            if not isinstance(response, dict):
-                self.logger.debug(
-                    f"Unexpected response type from commit search: {type(response)}"
-                )
-                return None
-
-            items = response.get("items", [])
-            if not items or len(items) == 0:
-                self.logger.debug(f"No commits found for email: {email}")
-                return None
-
-            # Get username from first commit's author
-            author = items[0].get("author")
-            if author and "login" in author:
-                username = author["login"]
-                if isinstance(username, str):
-                    self.logger.debug(
-                        f"Found GitHub username '{username}' for email {email}"
-                    )
-                    return username
-
-            self.logger.debug(f"No author information in commit for email: {email}")
-            return None
-
-        except Exception as e:
-            self.logger.debug(f"Failed to lookup username for email {email}: {e}")
-            return None
-
-    async def get_commit_verification(
-        self,
-        owner: str,
-        repo: str,
-        ref: str,
-    ) -> GitHubVerificationInfo | None:
-        """
-        Get GitHub's verification information for a commit.
-
-        This fetches the commit data from GitHub's API which includes
-        a verification object describing GitHub's analysis of the signature.
-
-        Args:
-            owner: Repository owner (user or organization).
-            repo: Repository name.
-            ref: Git reference (commit SHA, branch name, or tag name).
-
-        Returns:
-            GitHubVerificationInfo if available, None if no verification data.
-
-        Raises:
-            Exception: If the API request fails.
-
-        Example:
-            >>> info = await client.get_commit_verification(
-            ...     "octocat", "Hello-World", "v1.0.0"
-            ... )
-            >>> if info and info.verified:
-            ...     print(f"GitHub verified: {info.reason}")
-        """
-        client = self._ensure_client()
-
-        self.logger.debug(f"Fetching commit verification for {owner}/{repo}@{ref}")
-
-        try:
-            response = await client.get(f"/repos/{owner}/{repo}/commits/{ref}")
-
-            if not isinstance(response, dict):
-                self.logger.error(
-                    f"Unexpected response type for commit: {type(response)}"
-                )
-                return None
-
-            commit_data = response.get("commit", {})
-            verification_data = commit_data.get("verification")
-
-            if not verification_data:
-                self.logger.debug("No verification data in commit response")
-                return None
-
-            # Parse verification data
-            return GitHubVerificationInfo(
-                verified=verification_data.get("verified", False),
-                reason=verification_data.get("reason", "unsigned"),
-                signature=verification_data.get("signature"),
-                payload=verification_data.get("payload"),
-            )
-
-        except Exception as e:
-            self.logger.warning(f"Failed to fetch commit verification: {e}")
-            # Don't raise - this is optional information
-            return None
+        return calculate_ssh_fingerprint(public_key, self.logger)
 
     def _is_key_expired(self, expires_at: str | None) -> bool | None:
         """
@@ -686,15 +347,15 @@ class GitHubKeysClient:
         Returns:
             True if expired, False if not expired, None if no expiration date.
         """
-        if not expires_at:
-            return None
+        return is_key_expired(expires_at, self.logger)
 
-        try:
-            from datetime import datetime
 
-            expiration = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            now = datetime.now(expiration.tzinfo)
-            return now > expiration
-        except Exception as e:
-            self.logger.warning(f"Failed to parse expiration date {expires_at}: {e}")
-            return None
+__all__ = [
+    "GitHubKeysClient",
+    "GitHubKeysClientBase",
+    "GitHubKeysError",
+    "GitHubVerificationInfo",
+    "GPGKeyInfo",
+    "KeyVerificationResult",
+    "SSHKeyInfo",
+]

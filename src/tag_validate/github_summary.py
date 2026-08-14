@@ -11,7 +11,16 @@ GITHUB_STEP_SUMMARY for display in GitHub Actions workflow runs.
 import os
 from pathlib import Path
 
-from .models import ValidationResult
+from .models import (
+    BranchCheckInfo,
+    IncrementCheckInfo,
+    KeyVerificationResult,
+    LatestCheckInfo,
+    SignatureInfo,
+    TagAgeCheckInfo,
+    ValidationResult,
+    VersionInfo,
+)
 
 
 def is_github_actions() -> bool:
@@ -34,6 +43,183 @@ def is_github_actions() -> bool:
         return True
     except (OSError, PermissionError):
         return False
+
+
+def _version_component_rows(version_info: VersionInfo, version_type: str) -> list[str]:
+    """Build the version component row for a parsed version, if any."""
+    if not version_info.normalized:
+        return []
+
+    if version_type == "semver":
+        components = f"{version_info.major}.{version_info.minor}.{version_info.patch}"
+        if version_info.prerelease:
+            components += f"-{version_info.prerelease}"
+        if version_info.build_metadata:
+            components += f"+{version_info.build_metadata}"
+        return [f"| **Version Components** | `{components}` |"]
+
+    if version_type == "calver":
+        components_parts = []
+        if version_info.year:
+            components_parts.append(str(version_info.year))
+        if version_info.month:
+            components_parts.append(str(version_info.month).zfill(2))
+        if version_info.day:
+            components_parts.append(str(version_info.day).zfill(2))
+        if version_info.micro:
+            components_parts.append(str(version_info.micro))
+        if components_parts:
+            components = ".".join(components_parts)
+            return [f"| **Version Components** | `{components}` |"]
+
+    return []
+
+
+def _version_rows(version_info: VersionInfo) -> list[str]:
+    """Build the version information rows."""
+    version_type = version_info.version_type or "unknown"
+    rows = [f"| **Tag Type** | `{version_type.upper()}` |"]
+    rows.extend(_version_component_rows(version_info, version_type))
+    rows.append(
+        f"| **Development Tag** | `{str(version_info.is_development).lower()}` |"
+    )
+    rows.append(f"| **Version Prefix** | `{str(version_info.has_prefix).lower()}` |")
+    return rows
+
+
+def _signature_rows(signature_info: SignatureInfo) -> list[str]:
+    """Build the signature information rows."""
+    sig_type = signature_info.type or "unsigned"
+    rows = [f"| **Signature Type** | `{sig_type.upper()}` |"]
+
+    if signature_info.signer_email:
+        rows.append(f"| **Signer Email** | `{signature_info.signer_email}` |")
+    if signature_info.key_id:
+        rows.append(f"| **Key ID** | `{signature_info.key_id}` |")
+    if signature_info.fingerprint:
+        rows.append(f"| **Fingerprint** | `{signature_info.fingerprint}` |")
+
+    rows.append(
+        f"| **Signature Verified** | `{str(signature_info.verified).lower()}` |"
+    )
+    return rows
+
+
+def _key_verification_rows(
+    verifications: list[KeyVerificationResult],
+) -> list[str]:
+    """Build the key registry verification rows for every checked service."""
+    rows: list[str] = []
+    for verification in verifications:
+        service_name = verification.service.capitalize()
+        rows.append(
+            f"| **{service_name} Registered** | `{str(verification.key_registered).lower()}` |"
+        )
+        if verification.server:
+            rows.append(f"| **{service_name} Server** | `{verification.server}` |")
+        if verification.username:
+            rows.append(f"| **{service_name} Username** | `{verification.username}` |")
+        if verification.user_email:
+            rows.append(f"| **{service_name} Email** | `{verification.user_email}` |")
+        if verification.user_name:
+            rows.append(f"| **{service_name} Name** | `{verification.user_name}` |")
+    return rows
+
+
+def _increment_rows(increment_check: IncrementCheckInfo) -> list[str]:
+    """Build the increment enforcement rows."""
+    # Indeterminate (None) fails closed, so report it as false
+    incremental = bool(increment_check.incremental)
+    rows = [f"| **Incremental** | `{str(incremental).lower()}` |"]
+
+    if len(increment_check.latest_tags) > 1:
+        # Multi-scheme push: report each scheme's baseline
+        for scheme, tag in sorted(increment_check.latest_tags.items()):
+            rows.append(f"| **Latest Existing Tag ({scheme})** | `{tag}` |")
+    elif increment_check.latest_tag:
+        rows.append(f"| **Latest Existing Tag** | `{increment_check.latest_tag}` |")
+    return rows
+
+
+def _branch_rows(branch_check: BranchCheckInfo) -> list[str]:
+    """Build the branch containment rows."""
+    # Indeterminate (None) fails closed, so report it as false
+    contains = bool(branch_check.contains)
+    rows = [f"| **On Required Branch** | `{str(contains).lower()}` |"]
+    if branch_check.branch:
+        rows.append(f"| **Required Branch** | `{branch_check.branch}` |")
+    return rows
+
+
+def _age_rows(age_check: TagAgeCheckInfo) -> list[str]:
+    """Build the tag age (freshness) rows."""
+    # Indeterminate (None) fails closed, so report it as false
+    recent = bool(age_check.recent)
+    rows = [f"| **Recent** | `{str(recent).lower()}` |"]
+    if age_check.max_age_minutes is not None:
+        rows.append(
+            f"| **Freshness Window** | `{age_check.max_age_minutes:g} minute(s)` |"
+        )
+    return rows
+
+
+def _latest_rows(latest_check: LatestCheckInfo) -> list[str]:
+    """Build the latest commit (branch tip) rows."""
+    # Indeterminate (None) fails closed, so report it as false
+    latest = bool(latest_check.latest)
+    rows = [f"| **Latest Commit** | `{str(latest).lower()}` |"]
+    if latest_check.branch:
+        rows.append(f"| **Target Branch** | `{latest_check.branch}` |")
+    return rows
+
+
+def build_summary_markdown(result: ValidationResult, tag_name: str) -> list[str]:
+    """
+    Build the markdown lines describing a validation result.
+
+    Args:
+        result: ValidationResult object containing validation details
+        tag_name: The tag name that was validated
+
+    Returns:
+        List of markdown lines, ready to be joined with newlines.
+    """
+    markdown_lines = [
+        "",
+        "## 🏷️ Tag Validation Results",
+        "",
+    ]
+
+    # Add overall validation status
+    if result.is_valid:
+        markdown_lines.append("### Overall Validation Result ✅")
+    else:
+        markdown_lines.append("### Overall Validation Result ❌")
+
+    markdown_lines.append("")
+    markdown_lines.append("| Property | Value |")
+    markdown_lines.append("|----------|-------|")
+
+    # Tag Name
+    markdown_lines.append(f"| **Tag Name** | `{tag_name}` |")
+
+    if result.version_info:
+        markdown_lines.extend(_version_rows(result.version_info))
+    if result.signature_info:
+        markdown_lines.extend(_signature_rows(result.signature_info))
+    if result.key_verifications:
+        markdown_lines.extend(_key_verification_rows(result.key_verifications))
+    if result.increment_check and result.increment_check.checked:
+        markdown_lines.extend(_increment_rows(result.increment_check))
+    if result.branch_check and result.branch_check.checked:
+        markdown_lines.extend(_branch_rows(result.branch_check))
+    if result.age_check and result.age_check.checked:
+        markdown_lines.extend(_age_rows(result.age_check))
+    if result.latest_check and result.latest_check.checked:
+        markdown_lines.extend(_latest_rows(result.latest_check))
+
+    markdown_lines.append("")
+    return markdown_lines
 
 
 def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
@@ -60,164 +246,7 @@ def write_validation_summary(result: ValidationResult, tag_name: str) -> None:
     summary_path = Path(github_step_summary)
 
     try:
-        # Build markdown content
-        markdown_lines = [
-            "",
-            "## 🏷️ Tag Validation Results",
-            "",
-        ]
-
-        # Add overall validation status
-        if result.is_valid:
-            markdown_lines.append("### Overall Validation Result ✅")
-        else:
-            markdown_lines.append("### Overall Validation Result ❌")
-
-        markdown_lines.append("")
-        markdown_lines.append("| Property | Value |")
-        markdown_lines.append("|----------|-------|")
-
-        # Tag Name
-        markdown_lines.append(f"| **Tag Name** | `{tag_name}` |")
-
-        # Version Information
-        if result.version_info:
-            version_type = result.version_info.version_type or "unknown"
-            markdown_lines.append(f"| **Tag Type** | `{version_type.upper()}` |")
-
-            # Version components based on type
-            if result.version_info.normalized:
-                if version_type == "semver":
-                    components = f"{result.version_info.major}.{result.version_info.minor}.{result.version_info.patch}"
-                    if result.version_info.prerelease:
-                        components += f"-{result.version_info.prerelease}"
-                    if result.version_info.build_metadata:
-                        components += f"+{result.version_info.build_metadata}"
-                    markdown_lines.append(
-                        f"| **Version Components** | `{components}` |"
-                    )
-                elif version_type == "calver":
-                    components_parts = []
-                    if result.version_info.year:
-                        components_parts.append(str(result.version_info.year))
-                    if result.version_info.month:
-                        components_parts.append(str(result.version_info.month).zfill(2))
-                    if result.version_info.day:
-                        components_parts.append(str(result.version_info.day).zfill(2))
-                    if result.version_info.micro:
-                        components_parts.append(str(result.version_info.micro))
-                    if components_parts:
-                        components = ".".join(components_parts)
-                        markdown_lines.append(
-                            f"| **Version Components** | `{components}` |"
-                        )
-
-            markdown_lines.append(
-                f"| **Development Tag** | `{str(result.version_info.is_development).lower()}` |"
-            )
-            markdown_lines.append(
-                f"| **Version Prefix** | `{str(result.version_info.has_prefix).lower()}` |"
-            )
-
-        # Signature Information
-        if result.signature_info:
-            sig_type = result.signature_info.type or "unsigned"
-            markdown_lines.append(f"| **Signature Type** | `{sig_type.upper()}` |")
-
-            if result.signature_info.signer_email:
-                markdown_lines.append(
-                    f"| **Signer Email** | `{result.signature_info.signer_email}` |"
-                )
-
-            if result.signature_info.key_id:
-                markdown_lines.append(
-                    f"| **Key ID** | `{result.signature_info.key_id}` |"
-                )
-
-            if result.signature_info.fingerprint:
-                markdown_lines.append(
-                    f"| **Fingerprint** | `{result.signature_info.fingerprint}` |"
-                )
-
-            markdown_lines.append(
-                f"| **Signature Verified** | `{str(result.signature_info.verified).lower()}` |"
-            )
-
-        # Key verifications (GitHub and/or Gerrit from key_verifications list)
-        if result.key_verifications:
-            for verification in result.key_verifications:
-                service_name = verification.service.capitalize()
-                markdown_lines.append(
-                    f"| **{service_name} Registered** | `{str(verification.key_registered).lower()}` |"
-                )
-
-                if verification.server:
-                    markdown_lines.append(
-                        f"| **{service_name} Server** | `{verification.server}` |"
-                    )
-
-                if verification.username:
-                    markdown_lines.append(
-                        f"| **{service_name} Username** | `{verification.username}` |"
-                    )
-                if verification.user_email:
-                    markdown_lines.append(
-                        f"| **{service_name} Email** | `{verification.user_email}` |"
-                    )
-                if verification.user_name:
-                    markdown_lines.append(
-                        f"| **{service_name} Name** | `{verification.user_name}` |"
-                    )
-
-        # Increment enforcement result
-        if result.increment_check and result.increment_check.checked:
-            # Indeterminate (None) fails closed, so report it as false
-            incremental = bool(result.increment_check.incremental)
-            markdown_lines.append(f"| **Incremental** | `{str(incremental).lower()}` |")
-            if len(result.increment_check.latest_tags) > 1:
-                # Multi-scheme push: report each scheme's baseline
-                for scheme, tag in sorted(result.increment_check.latest_tags.items()):
-                    markdown_lines.append(
-                        f"| **Latest Existing Tag ({scheme})** | `{tag}` |"
-                    )
-            elif result.increment_check.latest_tag:
-                markdown_lines.append(
-                    f"| **Latest Existing Tag** | `{result.increment_check.latest_tag}` |"
-                )
-
-        # Branch containment result
-        if result.branch_check and result.branch_check.checked:
-            # Indeterminate (None) fails closed, so report it as false
-            contains = bool(result.branch_check.contains)
-            markdown_lines.append(
-                f"| **On Required Branch** | `{str(contains).lower()}` |"
-            )
-            if result.branch_check.branch:
-                markdown_lines.append(
-                    f"| **Required Branch** | `{result.branch_check.branch}` |"
-                )
-
-        # Tag age (freshness) result
-        if result.age_check and result.age_check.checked:
-            # Indeterminate (None) fails closed, so report it as false
-            recent = bool(result.age_check.recent)
-            markdown_lines.append(f"| **Recent** | `{str(recent).lower()}` |")
-            if result.age_check.max_age_minutes is not None:
-                markdown_lines.append(
-                    f"| **Freshness Window** | `{result.age_check.max_age_minutes:g} minute(s)` |"
-                )
-
-        # Latest commit (branch tip) result
-        if result.latest_check and result.latest_check.checked:
-            # Indeterminate (None) fails closed, so report it as false
-            latest = bool(result.latest_check.latest)
-            markdown_lines.append(f"| **Latest Commit** | `{str(latest).lower()}` |")
-            if result.latest_check.branch:
-                markdown_lines.append(
-                    f"| **Target Branch** | `{result.latest_check.branch}` |"
-                )
-
-        markdown_lines.append("")
+        markdown_lines = build_summary_markdown(result, tag_name)
 
         # Write to summary file
         with summary_path.open("a", encoding="utf-8") as f:
