@@ -8,6 +8,8 @@ This module tests the SignatureDetector class with mocked git commands
 to verify signature detection and parsing logic.
 """
 
+import shutil
+import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import Mock, patch
@@ -18,6 +20,7 @@ import pytest
 from tag_validate.signature import (
     SignatureDetectionError,
     SignatureDetector,
+    fingerprint_from_ssh_signature,
 )
 
 # Sample git verify-tag outputs
@@ -298,7 +301,14 @@ class TestExtractSSHFingerprint:
 
     @pytest.mark.asyncio
     async def test_extract_ssh_fingerprint_from_tag(self, signature_detector):
-        """Test extracting SSH fingerprint from tag object."""
+        """A malformed signature block yields no fingerprint.
+
+        TAG_OBJECT_WITH_SSH_SIG carries an elided signature body (it ends
+        in "..."), so it cannot base64-decode. The result must be None
+        rather than a placeholder: callers treat any truthy value as a
+        real fingerprint and would report a registered key as
+        unregistered.
+        """
         mock_result = Mock(spec=CompletedProcess)
         mock_result.stdout = TAG_OBJECT_WITH_SSH_SIG
         mock_result.returncode = 0
@@ -308,9 +318,7 @@ class TestExtractSSHFingerprint:
                 "v1.0.0"
             )
 
-        # Current implementation returns None (TODO in code)
-        # Update this test when SSH signature parsing is implemented
-        assert fingerprint is None or isinstance(fingerprint, str)
+        assert fingerprint is None
 
     @pytest.mark.asyncio
     async def test_extract_ssh_fingerprint_no_signature(self, signature_detector):
@@ -325,6 +333,198 @@ class TestExtractSSHFingerprint:
             )
 
         assert fingerprint is None
+
+
+# Key types exercised against real signatures. Keys are generated per test
+# session rather than committed: a checked-in private key is key material
+# a secret scanner will (rightly) flag, however synthetic it is.
+SSH_KEY_TYPES = ["ed25519", "rsa", "ecdsa"]
+
+ssh_keygen_required = pytest.mark.skipif(
+    shutil.which("ssh-keygen") is None,
+    reason="ssh-keygen is unavailable",
+)
+
+
+@pytest.fixture(scope="session")
+def ssh_signature_fixtures(tmp_path_factory):
+    """Generate a key and a real signature for each supported key type.
+
+    Returns a mapping of key type to ``(armoured_signature, fingerprint)``,
+    where the fingerprint comes from ``ssh-keygen -lf``. Checking the
+    parser against OpenSSH's own output makes this a cross-implementation
+    test rather than a comparison against a value we recorded ourselves.
+    """
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is unavailable")
+
+    workdir = tmp_path_factory.mktemp("ssh-signatures")
+    fixtures = {}
+
+    for key_type in SSH_KEY_TYPES:
+        key_path = workdir / f"id_{key_type}"
+        # -N "" leaves the key passphrase-less; it lives only in a
+        # per-session temporary directory and never reaches the repo.
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                key_type,
+                "-N",
+                "",
+                "-C",
+                f"test-{key_type}",
+                "-f",
+                str(key_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        payload = workdir / f"{key_type}.txt"
+        payload.write_text(f"tag payload for {key_type}\n")
+        try:
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-Y",
+                    "sign",
+                    "-f",
+                    str(key_path),
+                    "-n",
+                    "git",
+                    str(payload),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            # Presence of ssh-keygen does not guarantee the `-Y sign`
+            # subcommand: older OpenSSH releases lack it, so the skipif on
+            # the binary alone is not enough. Skip cleanly when the option
+            # is unsupported, but re-raise any other signing failure so a
+            # genuine regression is not silently masked.
+            stderr = (exc.stderr or b"").decode("utf-8", "replace").lower()
+            if "unknown option" in stderr or "usage:" in stderr:
+                pytest.skip("ssh-keygen does not support '-Y sign'")
+            raise
+
+        listing = subprocess.run(
+            ["ssh-keygen", "-lf", f"{key_path}.pub"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        fingerprint = next(
+            part for part in listing.split() if part.startswith("SHA256:")
+        )
+
+        fixtures[key_type] = (Path(f"{payload}.sig").read_text(), fingerprint)
+
+    return fixtures
+
+
+def _tag_object_with(signature: str) -> str:
+    """Wrap a signature in a realistic annotated-tag object."""
+    return (
+        "object abc123def456\n"
+        "type commit\n"
+        "tag v1.0.0\n"
+        "tagger John Doe <john@example.com> 1704132000 -0800\n"
+        "\n"
+        "Release version 1.0.0\n"
+        f"{signature}"
+    )
+
+
+@ssh_keygen_required
+class TestSSHSignatureFingerprintParsing:
+    """Derive signer fingerprints from real SSH signature blocks."""
+
+    @pytest.mark.parametrize("key_type", SSH_KEY_TYPES)
+    def test_matches_ssh_keygen(self, ssh_signature_fixtures, key_type):
+        """The parsed fingerprint matches what ssh-keygen -lf reports."""
+        signature, expected = ssh_signature_fixtures[key_type]
+
+        assert fingerprint_from_ssh_signature(signature) == expected
+
+    @pytest.mark.parametrize("key_type", SSH_KEY_TYPES)
+    def test_tolerates_surrounding_tag_content(self, ssh_signature_fixtures, key_type):
+        """Tag headers and the message around the block are ignored."""
+        signature, expected = ssh_signature_fixtures[key_type]
+
+        assert fingerprint_from_ssh_signature(_tag_object_with(signature)) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key_type", SSH_KEY_TYPES)
+    async def test_extracted_from_tag_object(
+        self, signature_detector, ssh_signature_fixtures, key_type
+    ):
+        """The detector recovers the fingerprint from the tag object.
+
+        This is the path taken when gpg.ssh.allowedSignersFile is unset,
+        which is what produced the false negative in issue #151.
+        """
+        signature, expected = ssh_signature_fixtures[key_type]
+
+        mock_result = Mock(spec=CompletedProcess)
+        mock_result.stdout = _tag_object_with(signature)
+        mock_result.returncode = 0
+
+        with patch("tag_validate.signature.run_git", return_value=mock_result):
+            fingerprint = await signature_detector._extract_ssh_fingerprint_from_tag(
+                "v1.0.0"
+            )
+
+        assert fingerprint == expected
+        assert fingerprint != "SSH_SIGNATURE_PRESENT"
+
+
+class TestSSHSignatureFingerprintRejects:
+    """Malformed input yields None, never a truthy placeholder.
+
+    These cases need no key material, so they run everywhere.
+    """
+
+    @pytest.mark.parametrize(
+        "description,text",
+        [
+            ("empty input", ""),
+            ("no signature block", "just an ordinary tag message\n"),
+            (
+                "no end marker",
+                "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQ==\n",
+            ),
+            (
+                "body is not base64",
+                "-----BEGIN SSH SIGNATURE-----\n!!! not base64 !!!\n"
+                "-----END SSH SIGNATURE-----\n",
+            ),
+            (
+                "wrong magic preamble",
+                "-----BEGIN SSH SIGNATURE-----\nTk9UU1NIU0lHAAAAAQ==\n"
+                "-----END SSH SIGNATURE-----\n",
+            ),
+            (
+                "truncated before the length prefix",
+                "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAA=\n"
+                "-----END SSH SIGNATURE-----\n",
+            ),
+            (
+                "declared key length exceeds the blob",
+                "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAA//8=\n"
+                "-----END SSH SIGNATURE-----\n",
+            ),
+            (
+                "empty public key",
+                "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAAAA=\n"
+                "-----END SSH SIGNATURE-----\n",
+            ),
+        ],
+    )
+    def test_returns_none(self, description, text):
+        assert fingerprint_from_ssh_signature(text) is None, description
 
 
 class TestErrorHandling:
