@@ -10,12 +10,34 @@ This module defines type-safe data structures for:
 - GitHub key registry data
 - Version validation results
 - Complete validation workflow results
+
+Key and check models live in the sibling modules
+:mod:`tag_validate.models_keys` and :mod:`tag_validate.models_checks`;
+they are re-exported here so ``tag_validate.models`` remains the single
+import point for all model types.
 """
 
 from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from .models_checks import (
+    BranchCheckInfo,
+    IncrementCheckInfo,
+    LatestCheckInfo,
+    TagAgeCheckInfo,
+    VersionInfo,
+)
+from .models_keys import (
+    GerritAccountInfo,
+    GerritGPGKeyInfo,
+    GerritSSHKeyInfo,
+    GitHubVerificationInfo,
+    GPGKeyInfo,
+    KeyVerificationResult,
+    SSHKeyInfo,
+)
 
 
 class TagInfo(BaseModel):
@@ -62,287 +84,6 @@ class SignatureInfo(BaseModel):
         default=None, description="Email address from the signature"
     )
     signature_data: str | None = Field(default=None, description="Raw signature data")
-
-
-class GPGKeyInfo(BaseModel):
-    """Information about a GPG key from GitHub's API."""
-
-    id: int = Field(..., description="GitHub's internal ID for this key")
-    key_id: str = Field(..., description="GPG key ID (e.g., '3262EFF25BA0D270')")
-    name: str | None = Field(
-        default=None, description="User-provided name/description for the key"
-    )
-    primary_key_id: int | None = Field(
-        default=None, description="ID of primary key if this is a subkey"
-    )
-    emails: list[str] = Field(
-        default_factory=list, description="Email addresses associated with key"
-    )
-    can_sign: bool = Field(
-        default=False, description="Whether this key can be used for signing"
-    )
-    can_encrypt_comms: bool = Field(
-        default=False, description="Whether key can encrypt communications"
-    )
-    can_encrypt_storage: bool = Field(
-        default=False, description="Whether key can encrypt storage"
-    )
-    can_certify: bool = Field(
-        default=False, description="Whether key can certify other keys"
-    )
-    created_at: str = Field(
-        ..., description="ISO 8601 timestamp when key was added to GitHub"
-    )
-    expires_at: str | None = Field(
-        default=None, description="ISO 8601 timestamp when key expires"
-    )
-    revoked: bool = Field(default=False, description="Whether the key has been revoked")
-    raw_key: str | None = Field(default=None, description="Raw PGP public key block")
-    subkeys: list["GPGKeyInfo"] = Field(
-        default_factory=list, description="List of subkeys associated with this key"
-    )
-
-
-class SSHKeyInfo(BaseModel):
-    """Information about an SSH signing key from GitHub's API."""
-
-    id: int = Field(..., description="GitHub's internal ID for this key")
-    key: str = Field(..., description="SSH public key data")
-    title: str = Field(..., description="User-provided title/description for the key")
-    created_at: str = Field(
-        ..., description="ISO 8601 timestamp when key was added to GitHub"
-    )
-
-
-class GerritAccountInfo(BaseModel):
-    """Information about a Gerrit account."""
-
-    account_id: int = Field(..., description="Gerrit account ID")
-    name: str | None = Field(default=None, description="Account display name")
-    email: str | None = Field(default=None, description="Primary email address")
-    username: str | None = Field(default=None, description="Username")
-    status: str = Field(..., description="Account status")
-
-
-class GerritSSHKeyInfo(BaseModel):
-    """Information about an SSH key from Gerrit's API."""
-
-    seq: int = Field(..., description="Sequence number of the key")
-    ssh_public_key: str = Field(..., description="SSH public key data")
-    encoded_key: str = Field(..., description="Base64 encoded key")
-    algorithm: str = Field(
-        ..., description="Key algorithm (e.g., ssh-rsa, ssh-ed25519)"
-    )
-    comment: str | None = Field(default=None, description="Key comment")
-    valid: bool = Field(..., description="Whether the key is valid")
-
-
-class GerritGPGKeyInfo(BaseModel):
-    """Information about a GPG key from Gerrit's API."""
-
-    id: str = Field(..., description="GPG key ID (short identifier)")
-    fingerprint: str = Field(..., description="Full key fingerprint")
-    user_ids: list[str] = Field(default_factory=list, description="List of user IDs")
-    key: str = Field(..., description="ASCII-armored public key")
-    status: str = Field(..., description="Key status")
-    problems: list[str] = Field(
-        default_factory=list, description="Any problems with the key"
-    )
-
-
-class GitHubVerificationInfo(BaseModel):
-    """GitHub's verification information from the commits API."""
-
-    verified: bool = Field(..., description="Whether GitHub verified the signature")
-    reason: str = Field(..., description="GitHub's reason code for verification status")
-    signature: str | None = Field(
-        default=None, description="The signature that was extracted"
-    )
-    payload: str | None = Field(default=None, description="The value that was signed")
-
-
-class KeyVerificationResult(BaseModel):
-    """Result of verifying a key against GitHub's or Gerrit's registry."""
-
-    key_registered: bool = Field(
-        default=False, description="Whether the key is registered on the service"
-    )
-    username: str = Field(..., description="Username checked")
-    user_enumerated: bool = Field(
-        default=False, description="Whether the username was auto-detected from email"
-    )
-    key_info: GPGKeyInfo | SSHKeyInfo | GerritGPGKeyInfo | GerritSSHKeyInfo | None = (
-        Field(default=None, description="Full key information from API if found")
-    )
-    service: str = Field(
-        default="github", description="Service that was checked (github or gerrit)"
-    )
-    server: str | None = Field(default=None, description="Server hostname for Gerrit")
-    user_name: str | None = Field(default=None, description="User's display name")
-    user_email: str | None = Field(default=None, description="User's email address")
-
-
-class VersionInfo(BaseModel):
-    """Information about version string parsing and validation."""
-
-    raw: str = Field(..., description="Original version string")
-    normalized: str | None = Field(
-        default=None, description="Normalized version string (without prefix)"
-    )
-    is_valid: bool = Field(default=False, description="Whether version is valid")
-    version_type: Literal["semver", "calver", "both", "other"] = Field(
-        default="other", description="Type of version format detected"
-    )
-    has_prefix: bool = Field(
-        default=False, description="Whether version has 'v' or 'V' prefix"
-    )
-    is_development: bool = Field(
-        default=False,
-        description="Whether version is a development/pre-release version",
-    )
-
-    # SemVer fields
-    major: int | None = Field(default=None, description="Major version number (SemVer)")
-    minor: int | None = Field(default=None, description="Minor version number (SemVer)")
-    patch: int | None = Field(default=None, description="Patch version number (SemVer)")
-    prerelease: str | None = Field(
-        default=None, description="Pre-release identifier (SemVer)"
-    )
-    build_metadata: str | None = Field(
-        default=None, description="Build metadata (SemVer)"
-    )
-
-    # CalVer fields
-    year: int | None = Field(default=None, description="Year (CalVer)")
-    month: int | None = Field(default=None, description="Month (CalVer)")
-    day: int | None = Field(default=None, description="Day (CalVer)")
-    micro: int | None = Field(default=None, description="Micro version (CalVer)")
-    modifier: str | None = Field(default=None, description="Version modifier (CalVer)")
-
-    # Validation errors
-    errors: list[str] = Field(default_factory=list, description="Validation errors")
-
-
-class IncrementCheckInfo(BaseModel):
-    """Result of checking that a tag increments the repository version."""
-
-    checked: bool = Field(
-        default=False, description="Whether the increment check was performed"
-    )
-    incremental: bool | None = Field(
-        default=None,
-        description=(
-            "Whether the tag is strictly greater than every existing "
-            "comparable tag (None when not checked or indeterminate)"
-        ),
-    )
-    latest_tag: str | None = Field(
-        default=None,
-        description=(
-            "Baseline tag for reporting: the tag that blocked the push "
-            "when the check fails, otherwise the highest existing tag "
-            "under the scheme with the most comparable tags"
-        ),
-    )
-    latest_tags: dict[str, str] = Field(
-        default_factory=dict,
-        description="Highest existing comparable tag per versioning scheme",
-    )
-    candidate_count: int = Field(
-        default=0, description="Number of existing comparable tags considered"
-    )
-    scheme: str | None = Field(
-        default=None,
-        description="Versioning scheme(s) used for comparison",
-    )
-    tag_source: str | None = Field(
-        default=None,
-        description="Source used to enumerate repository tags (api, git, api+git)",
-    )
-    errors: list[str] = Field(
-        default_factory=list, description="Errors encountered during the check"
-    )
-
-
-class BranchCheckInfo(BaseModel):
-    """Result of checking that a tag's commit is reachable from a branch."""
-
-    checked: bool = Field(
-        default=False, description="Whether the branch containment check was performed"
-    )
-    branch: str | None = Field(
-        default=None, description="Branch the tag commit was verified against"
-    )
-    contains: bool | None = Field(
-        default=None,
-        description=(
-            "Whether the tag commit is reachable from the branch "
-            "(None when not checked or indeterminate)"
-        ),
-    )
-    method: str | None = Field(
-        default=None, description="Method used for the check (api or git)"
-    )
-    errors: list[str] = Field(
-        default_factory=list, description="Errors encountered during the check"
-    )
-
-
-class TagAgeCheckInfo(BaseModel):
-    """Result of checking that a tag was created recently."""
-
-    checked: bool = Field(
-        default=False, description="Whether the tag age check was performed"
-    )
-    recent: bool | None = Field(
-        default=None,
-        description=(
-            "Whether the tag was created within the allowed window "
-            "(None when not checked or indeterminate)"
-        ),
-    )
-    tag_date: str | None = Field(
-        default=None, description="ISO 8601 timestamp when the tag was created"
-    )
-    age_seconds: float | None = Field(
-        default=None, description="Age of the tag at validation time, in seconds"
-    )
-    max_age_minutes: float | None = Field(
-        default=None, description="Maximum permitted tag age, in minutes"
-    )
-    errors: list[str] = Field(
-        default_factory=list, description="Errors encountered during the check"
-    )
-
-
-class LatestCheckInfo(BaseModel):
-    """Result of checking that a tag points to the tip of a branch."""
-
-    checked: bool = Field(
-        default=False, description="Whether the latest-commit check was performed"
-    )
-    latest: bool | None = Field(
-        default=None,
-        description=(
-            "Whether the tag commit is the current tip of the branch "
-            "(None when not checked or indeterminate)"
-        ),
-    )
-    branch: str | None = Field(
-        default=None, description="Branch the tag commit was compared against"
-    )
-    tag_sha: str | None = Field(
-        default=None, description="Commit SHA the tag points to"
-    )
-    branch_sha: str | None = Field(
-        default=None, description="Commit SHA at the tip of the branch"
-    )
-    method: str | None = Field(
-        default=None, description="Method used for the check (api or git)"
-    )
-    errors: list[str] = Field(
-        default_factory=list, description="Errors encountered during the check"
-    )
 
 
 class ValidationConfig(BaseModel):
@@ -494,3 +235,24 @@ class RepositoryInfo(BaseModel):
     clone_url: str = Field(..., description="HTTPS clone URL")
     web_url: str | None = Field(default=None, description="Web URL to repository")
     tag: str | None = Field(default=None, description="Specific tag being validated")
+
+
+__all__ = [
+    "BranchCheckInfo",
+    "GPGKeyInfo",
+    "GerritAccountInfo",
+    "GerritGPGKeyInfo",
+    "GerritSSHKeyInfo",
+    "GitHubVerificationInfo",
+    "IncrementCheckInfo",
+    "KeyVerificationResult",
+    "LatestCheckInfo",
+    "RepositoryInfo",
+    "SSHKeyInfo",
+    "SignatureInfo",
+    "TagAgeCheckInfo",
+    "TagInfo",
+    "ValidationConfig",
+    "ValidationResult",
+    "VersionInfo",
+]
