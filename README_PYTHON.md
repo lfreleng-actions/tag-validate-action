@@ -612,10 +612,21 @@ src/tag_validate/
 ├── validation.py          # Version validation (SemVer/CalVer)
 ├── signature.py           # Signature detection (GPG/SSH)
 ├── tag_operations.py      # Tag fetching and parsing
+├── increment_check.py     # Increment, branch, age and latest gates
 ├── github_keys.py         # GitHub API integration
+├── gerrit_keys.py         # Gerrit API integration
+├── netrc.py               # netrc discovery and parsing
+├── github_summary.py      # GitHub Actions step summary
 ├── workflow.py            # Workflow orchestration
 └── cli.py                 # Command-line interface
 ```
+
+Each module above is the public entry point for its concern. Larger
+ones delegate to sibling modules sharing the parent's name — for
+example `netrc.py` imports from `netrc_types.py`, `netrc_tokenizer.py`,
+`netrc_parser.py` and `netrc_discovery.py`, and `workflow.py` composes
+`ValidationWorkflow` from mixins in `workflow_*.py`. Import from the
+parent module; the siblings are implementation detail.
 
 ### Workflow Steps
 
