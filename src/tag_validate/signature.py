@@ -16,7 +16,17 @@ from dependamerge.git_ops import run_git
 
 from .models import SignatureInfo
 from .signature_gpg import GpgSignatureMixin
-from .signature_ssh import SshSignatureMixin
+from .signature_ssh import SshSignatureMixin, fingerprint_from_ssh_signature
+
+__all__ = [
+    "SignatureDetectionError",
+    "SignatureDetector",
+    "SignatureInfo",
+    # Re-exported so callers and tests can reach the SSHSIG parser through
+    # the public module rather than the sibling implementation module.
+    "fingerprint_from_ssh_signature",
+    "run_git",
+]
 
 logger = logging.getLogger(__name__)
 

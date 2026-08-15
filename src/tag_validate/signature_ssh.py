@@ -9,8 +9,12 @@ fingerprint is absent from that output, falls back to inspecting the tag
 object itself.
 """
 
+import base64
+import binascii
+import hashlib
 import logging
 import re
+import struct
 from pathlib import Path
 
 from .models import SignatureInfo
@@ -18,6 +22,104 @@ from .models import SignatureInfo
 # Bound to the public module's name so log records keep reporting
 # `tag_validate.signature` no matter which sibling module emits them.
 logger = logging.getLogger(f"{__package__}.signature")
+
+SSH_SIG_FOOTER = "-----END SSH SIGNATURE-----"
+
+# Wire format of an armoured SSH signature, per OpenSSH's PROTOCOL.sshsig:
+#
+#     byte[6]   MAGIC_PREAMBLE ("SSHSIG")
+#     uint32    SIG_VERSION
+#     string    publickey
+#     string    namespace
+#     string    reserved
+#     string    hash_algorithm
+#     string    signature
+#
+# Only the leading magic, version and public key are needed here.
+_SSHSIG_MAGIC = b"SSHSIG"
+_SSHSIG_HEADER_LEN = len(_SSHSIG_MAGIC) + 4  # magic + uint32 version
+
+
+def _read_ssh_string(blob: bytes, offset: int) -> bytes:
+    """Read one length-prefixed string from an SSH wire-format blob.
+
+    Args:
+        blob: Decoded signature bytes.
+        offset: Byte offset of the 4-byte length prefix.
+
+    Returns:
+        The string body.
+
+    Raises:
+        ValueError: If the blob is too short for the declared length.
+    """
+    if offset + 4 > len(blob):
+        raise ValueError("truncated SSH signature: no length prefix")
+    (length,) = struct.unpack(">I", blob[offset : offset + 4])
+    start = offset + 4
+    end = start + length
+    if end > len(blob):
+        raise ValueError(
+            f"truncated SSH signature: declared length {length} "
+            f"exceeds remaining {len(blob) - start} bytes"
+        )
+    return blob[start:end]
+
+
+def fingerprint_from_ssh_signature(armoured: str) -> str | None:
+    """Derive the signer's SHA256 fingerprint from an armoured SSH signature.
+
+    Git embeds the signer's public key in the signature itself, so the
+    fingerprint can be computed without consulting an allowed-signers
+    file or any external key registry. OpenSSH's SHA256 fingerprint is
+    the base64-encoded SHA256 digest of the wire-format public key, with
+    padding stripped -- the same value ``ssh-keygen -lf`` reports.
+
+    Args:
+        armoured: Text containing a ``-----BEGIN SSH SIGNATURE-----``
+            block. Surrounding tag content is tolerated.
+
+    Returns:
+        Fingerprint as ``"SHA256:..."``, or None when no complete,
+        well-formed signature block is present.
+    """
+    header = SshSignatureMixin.SSH_SIG_HEADER
+    start = armoured.find(header)
+    if start == -1:
+        logger.debug("No SSH signature block found")
+        return None
+
+    end = armoured.find(SSH_SIG_FOOTER, start)
+    if end == -1:
+        logger.debug("SSH signature block incomplete")
+        return None
+
+    body = armoured[start + len(header) : end]
+
+    try:
+        # The armour wraps base64 at 70 columns; validate=True would
+        # reject the newlines, so strip all whitespace first.
+        blob = base64.b64decode("".join(body.split()), validate=True)
+    except (binascii.Error, ValueError) as e:
+        logger.debug(f"SSH signature is not valid base64: {e}")
+        return None
+
+    if not blob.startswith(_SSHSIG_MAGIC):
+        logger.debug("SSH signature missing the SSHSIG magic preamble")
+        return None
+
+    try:
+        public_key = _read_ssh_string(blob, _SSHSIG_HEADER_LEN)
+    except (ValueError, struct.error) as e:
+        logger.debug(f"Could not read public key from SSH signature: {e}")
+        return None
+
+    if not public_key:
+        logger.debug("SSH signature carries an empty public key")
+        return None
+
+    digest = hashlib.sha256(public_key).digest()
+    return f"SHA256:{base64.b64encode(digest).decode('ascii').rstrip('=')}"
 
 
 class SshSignatureMixin:
@@ -93,74 +195,43 @@ class SshSignatureMixin:
 
     async def _extract_ssh_fingerprint_from_tag(self, tag_name: str) -> str | None:
         """
-        Extract SSH key fingerprint from the tag object.
+        Extract the SSH key fingerprint from the tag object.
 
-        This is a fallback method when the fingerprint can't be extracted
-        from the verify-tag output. It extracts the SSH signature from the
-        tag object and uses ssh-keygen to get the public key fingerprint.
+        This is the fallback used when the fingerprint is absent from
+        ``git verify-tag`` output, which happens whenever
+        ``gpg.ssh.allowedSignersFile`` is unset: git then prints no
+        ``Good "git" signature ... key SHA256:...`` line at all. The
+        signature itself still carries the signer's public key, so the
+        fingerprint is recoverable from the tag object alone.
 
         Args:
             tag_name: Name of the tag
 
         Returns:
-            SSH key fingerprint if found, None otherwise
+            Fingerprint as ``"SHA256:..."``, or None when the tag carries
+            no parseable SSH signature. Returning None matters: callers
+            treat any truthy value as a real fingerprint and would
+            otherwise report a registered key as unregistered.
         """
         # Resolved through the public module so that anything patching
         # `tag_validate.signature.run_git` still intercepts these calls.
         from . import signature
 
         try:
-            # Get the tag object content
             result = signature.run_git(
                 ["git", "cat-file", "tag", tag_name],
                 cwd=self.repo_path,
                 check=True,
             )
-
-            tag_content = result.stdout
-
-            # Look for SSH signature in the tag object
-            if self.SSH_SIG_HEADER not in tag_content:
-                logger.debug("No SSH signature found in tag object")
-                return None
-
-            logger.debug("Found SSH signature in tag object")
-
-            # Extract the SSH signature block
-            sig_start = tag_content.find(self.SSH_SIG_HEADER)
-            sig_end = tag_content.find("-----END SSH SIGNATURE-----", sig_start)
-            if sig_end == -1:
-                logger.debug("SSH signature block incomplete")
-                return None
-
-            sig_end += len("-----END SSH SIGNATURE-----")
-
-            # Extract the public key from the signature
-            # SSH signatures in Git contain the public key
-            # We need to parse the signature to extract it
-            # For now, try to use git's show command with format
-            try:
-                # Try to get the signer's key from git
-                show_result = signature.run_git(
-                    ["git", "cat-file", "-p", tag_name],
-                    cwd=self.repo_path,
-                    check=True,
-                )
-
-                # Look for the signer line which may contain key info
-                for line in show_result.stdout.split("\n"):
-                    if "signer" in line.lower() or "key" in line.lower():
-                        logger.debug(f"Found potential key line: {line}")
-
-                # Since we can't easily extract the public key from the signature,
-                # return a placeholder that indicates SSH signature was found
-                # The actual fingerprint would require parsing the SSH signature format
-                return "SSH_SIGNATURE_PRESENT"
-
-            except Exception as e:
-                logger.debug(f"Could not extract key info: {e}")
-                return "SSH_SIGNATURE_PRESENT"
-
         except Exception as e:
-            logger.debug(f"Failed to extract SSH fingerprint from tag object: {e}")
+            logger.debug(f"Failed to read tag object for {tag_name}: {e}")
             return None
+
+        fingerprint = fingerprint_from_ssh_signature(result.stdout)
+        if fingerprint:
+            logger.debug(f"Derived SSH fingerprint from tag object: {fingerprint}")
+        else:
+            logger.debug(
+                f"Could not derive an SSH fingerprint from tag object {tag_name}"
+            )
+        return fingerprint
