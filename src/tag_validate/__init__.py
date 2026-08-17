@@ -26,16 +26,25 @@ Example usage:
     >>> result = await validator.validate_tag("v1.2.3")
 """
 
-try:
-    from tag_validate._version import __version__
-except ImportError:
-    # Fall back to importlib.metadata if _version.py doesn't exist
-    from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    # _version.py is generated at build time by hatch-vcs and is absent
+    # from a plain source checkout, such as a type-checker's isolated CI
+    # environment. Declare the symbol so static analysis resolves it
+    # without the generated module present.
+    __version__ = "unknown"
+else:
     try:
-        __version__ = version("tag-validate")
-    except PackageNotFoundError:
-        __version__ = "unknown"
+        from tag_validate._version import __version__
+    except ImportError:
+        # Fall back to importlib.metadata if _version.py doesn't exist
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            __version__ = version("tag-validate")
+        except PackageNotFoundError:
+            __version__ = "unknown"
 
 __all__ = [
     "__version__",
