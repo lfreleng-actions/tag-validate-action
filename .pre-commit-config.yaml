@@ -4,7 +4,12 @@
 
 ci:
   autofix_prs: false
-  skip: [gha-workflow-linter]
+  # basedpyright is skipped on pre-commit.ci: the mirror bundles a Node
+  # runtime, so its hook environment is ~246MiB on its own -- adding the
+  # project's dependencies (needed to resolve imports) pushes it past the
+  # 250MiB tier limit. It still runs for local developers via prek/
+  # pre-commit, where the project .venv provides import resolution.
+  skip: [gha-workflow-linter, basedpyright]
   autofix_commit_msg: |
     Chore: pre-commit autofixes
 
@@ -55,10 +60,8 @@ repos:
     rev: 7c55798a78262d14b2074abf623d8a992ebb70d4  # frozen: v0.16.2
     hooks:
       - id: ruff
-        files: ^(scripts|tests|custom_components)/.+\.py$
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
-        files: ^(scripts|tests|custom_components)/.+\.py$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: 41e691678310dfd3833f7ab4e180ddb014310356  # frozen: v2.3.0
@@ -110,6 +113,12 @@ repos:
       - id: codespell
         exclude: ^\.github/gpg-export/
         args: [--ignore-words-list=fpr]
+
+  # Requires a mirror, primary repo lacks .pre-commit-hooks.yaml
+  - repo: https://github.com/DetachHead/basedpyright-prek-mirror
+    rev: d55eabd2531b4f4a4c49c30fba627ce3a636ab79  # frozen: 1.39.9
+    hooks:
+      - id: basedpyright
 
   - repo: https://github.com/lfreleng-actions/gha-workflow-linter
     rev: 087342b0da33b43edfe4a0b31747b336334003b4  # frozen: v1.3.0
