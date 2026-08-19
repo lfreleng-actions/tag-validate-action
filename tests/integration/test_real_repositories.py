@@ -405,9 +405,6 @@ class TestEndToEndWorkflow:
             assert sig_info.type == "gpg"
             assert sig_info.verified is True
 
-        # Workflow complete - all checks passed
-        assert True
-
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_full_validation_workflow_calver(self, calver_repo_path: Path):
@@ -445,9 +442,6 @@ class TestEndToEndWorkflow:
             # With GPG keys available, expect verified signature
             assert sig_info.type == "gpg"
             assert sig_info.verified is True
-
-        # Workflow complete - all checks passed
-        assert True
 
     @pytest.mark.integration
     @pytest.mark.asyncio
