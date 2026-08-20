@@ -16,7 +16,9 @@ from tag_validate.models import (
     ValidationResult,
     VersionInfo,
 )
+from tag_validate.tag_operations import TagLocationError
 from tag_validate.workflow import ValidationWorkflow
+from tag_validate.workflow_types import _TagLocationRequest
 
 
 class TestValidationWorkflow:
@@ -811,3 +813,38 @@ class TestValidationWorkflow:
 
             assert result.is_valid is False
             assert any("Signature detection failed" in error for error in result.errors)
+
+
+class TestValidateDefiniteRemote:
+    """Test the hint emitted for unparsable remote tag locations."""
+
+    HINT = "Expected format: 'owner/repo@tag' (e.g., 'torvalds/linux@v6.0')"
+
+    @pytest.mark.asyncio
+    async def test_unparsable_location_gets_format_hint(self):
+        """An invalid location explains the expected format."""
+        workflow = ValidationWorkflow(ValidationConfig())
+
+        result = await workflow._validate_definite_remote(
+            "not-a-location@", _TagLocationRequest()
+        )
+
+        assert result.is_valid is False
+        assert self.HINT in result.info
+
+    @pytest.mark.asyncio
+    async def test_clone_failure_does_not_get_format_hint(self):
+        """A parseable location that fails to clone is not a format fault."""
+        workflow = ValidationWorkflow(ValidationConfig())
+
+        with patch.object(
+            workflow,
+            "_clone_and_validate",
+            side_effect=TagLocationError("Failed to clone owner/repo@v1.0.0"),
+        ):
+            result = await workflow._validate_definite_remote(
+                "owner/repo@v1.0.0", _TagLocationRequest()
+            )
+
+        assert result.is_valid is False
+        assert self.HINT not in result.info
