@@ -856,3 +856,59 @@ class TestRequireRecentLatestOptions:
         call_args = mock_workflow_class.call_args[0][0]
         assert call_args.max_tag_age_minutes is None
         assert call_args.require_latest is False
+
+
+class TestVerifyPathOptionLocalDetection:
+    """Test that --path decides whether a location is local.
+
+    The workflow resolves ambiguous locations against its configured
+    repository path, so normalization has to consult the same directory.
+    """
+
+    _mock_result = staticmethod(TestRequireBranchNormalization._mock_result)
+
+    def _invoke(self, mock_workflow_class, args):
+        """Invoke verify with a passing mocked workflow."""
+        mock_workflow = Mock()
+        mock_workflow_class.return_value = mock_workflow
+        mock_workflow.validate_tag_location.return_value = async_return(
+            self._mock_result()
+        )
+        mock_workflow.create_validation_summary.return_value = "PASSED"
+        result = runner.invoke(app, ["verify", *args])
+        return result, mock_workflow
+
+    @staticmethod
+    def _make_repo(root, relative_path):
+        """Create a directory that looks like a Git repository."""
+        repo = root / relative_path
+        repo.mkdir(parents=True)
+        (repo / ".git").mkdir()
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_repo_under_path_is_not_rewritten(self, mock_workflow_class, tmp_path):
+        """A repo under --path stays a local location."""
+        self._make_repo(tmp_path, "nested/repo")
+
+        result, mock_workflow = self._invoke(
+            mock_workflow_class,
+            ["nested/repo/v1.0.0", "--path", str(tmp_path)],
+        )
+
+        assert result.exit_code == 0
+        location = mock_workflow.validate_tag_location.call_args.kwargs["tag_location"]
+        assert location == "nested/repo/v1.0.0"
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_absent_under_path_is_rewritten_as_remote(
+        self, mock_workflow_class, tmp_path
+    ):
+        """With no such repo under --path, the location goes remote."""
+        result, mock_workflow = self._invoke(
+            mock_workflow_class,
+            ["owner/repo/v1.0.0", "--path", str(tmp_path)],
+        )
+
+        assert result.exit_code == 0
+        location = mock_workflow.validate_tag_location.call_args.kwargs["tag_location"]
+        assert location == "owner/repo@v1.0.0"
