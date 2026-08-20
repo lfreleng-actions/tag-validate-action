@@ -242,7 +242,11 @@ class TagOperations(TagMetadataMixin, SshAllowedSignersMixin):
             ["git", "cat-file", "-p", tag_name],
             cwd=repo_path,
         )
-        return result.stdout  # type: ignore[no-any-return]
+        # Annotated rather than suppressed: run_git resolves to Any wherever
+        # dependamerge is unavailable (the pre-commit mypy environment), and
+        # to str where it is installed.
+        stdout: str = result.stdout
+        return stdout
 
     async def _get_tag_type(
         self, tag_name: str, repo_path: Path
@@ -292,9 +296,9 @@ class TagOperations(TagMetadataMixin, SshAllowedSignersMixin):
             ["git", "rev-list", "-n", "1", tag_name],
             cwd=repo_path,
         )
-        commit_sha = result.stdout.strip()
+        commit_sha: str = result.stdout.strip()
         logger.debug(f"Tag {tag_name} points to commit {commit_sha[:8]}")
-        return commit_sha  # type: ignore[no-any-return]
+        return commit_sha
 
     def build_repository_info(
         self,
