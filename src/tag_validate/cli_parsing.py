@@ -137,7 +137,7 @@ def normalize_tag_location(tag_location: str) -> str:
 
     Handles multiple input formats with pragmatic fallback:
     - owner/repo@tag (remote, already correct)
-    - owner/repo/tag (remote if 2+ slashes, otherwise ambiguous)
+    - owner/repo/tag (remote if 2+ slashes and no local repository)
     - https://github.com/owner/repo@tag (remote URL)
     - ./path/to/repo/tag or /path/to/repo/tag (local path)
     - path/to/repo/tag (ambiguous - check if local path exists, else treat as remote)
@@ -169,22 +169,22 @@ def normalize_tag_location(tag_location: str) -> str:
     # Count slashes to determine format
     slash_count = tag_location.count("/")
 
+    # No slashes - it's a local tag name
+    if slash_count == 0:
+        return tag_location
+
+    # Ambiguous: 'owner/repo/tag' and 'path/to/repo/tag' are syntactically
+    # identical, so filesystem state is the only discriminator. Check for a
+    # local repository before assuming remote.
+    if _looks_like_local_repository(tag_location.rsplit("/", 1)[0]):
+        logger.debug(f"Detected local repository path: {tag_location}")
+        return tag_location
+
     # If 2+ slashes, likely owner/repo/tag format - convert to owner/repo@tag
     if slash_count >= 2:
         # Split into parts and convert last slash to @
         parts = tag_location.rsplit("/", 1)
         return f"{parts[0]}@{parts[1]}"
-
-    # No slashes - it's a local tag name
-    if slash_count != 1:
-        return tag_location
-
-    # If 1 slash, it's ambiguous (could be path/to/repo or partial path)
-    # Check if it looks like a local path by testing if directory exists
-    if _looks_like_local_repository(tag_location.rsplit("/", 1)[0]):
-        # It's a local repository path - don't convert
-        logger.debug(f"Detected local repository path: {tag_location}")
-        return tag_location
 
     # Not a local path - could be owner/repo format but needs more slashes
     # Let it pass through as-is for workflow to handle
