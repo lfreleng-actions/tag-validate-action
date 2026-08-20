@@ -158,8 +158,12 @@ async def run_verify(
                 options.owner, options.github_token, options.json_output
             )
 
-        # Normalize tag location (handle owner/repo/tag → owner/repo@tag)
-        normalized_location = normalize_tag_location(options.tag_location)
+        # Normalize tag location (handle owner/repo/tag → owner/repo@tag),
+        # resolving ambiguous paths against the same directory the workflow
+        # was configured with rather than the current working directory
+        normalized_location = normalize_tag_location(
+            options.tag_location, base_path=options.repo_path
+        )
 
         result = await _run_workflow(
             workflow, options, plan, normalized_location, resolved_owner
