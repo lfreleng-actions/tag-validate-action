@@ -133,6 +133,11 @@ async def _lookup_gerrit_account(client: Any, owner: str, json_output: bool) -> 
             error_msg = f"Gerrit account not found for '{owner}'"
             report_error(error_msg, json_output=json_output)
             raise typer.Exit(EXIT_INVALID_INPUT)
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError; without this guard the
+        # "account not found" exit above is caught below and reported a
+        # second time, with the exit code interpolated as the message.
+        raise
     except Exception as exc:
         if json_output:
             error_msg = f"Failed to find Gerrit account for '{owner}': {exc}"
