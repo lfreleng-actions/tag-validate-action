@@ -156,6 +156,9 @@ class TestSHA256Fingerprints:
             (f"SHA256:{base64.b64encode(b'x' * 16).decode().rstrip('=')}", 16),
             # Too long
             ("SHA256:ThisIsTooLongForASHA256FingerprintAndShouldFail12345", 39),
+            # 44 unpadded data characters: matched the old fast-path pattern
+            # and so escaped validation entirely, despite decoding to 33 bytes
+            (f"SHA256:{'A' * 44}", 33),
         ]
 
         for invalid_input, decoded_length in wrong_length_cases:
@@ -168,6 +171,13 @@ class TestSHA256Fingerprints:
             assert "invalid Base64 characters" not in message, (
                 f"Encoding blamed for a length fault: {invalid_input}"
             )
+
+    def test_padded_sha256_fingerprint_accepted(self):
+        """Test that the 43-character-plus-padding form stays valid."""
+        padded = base64.b64encode(b"x" * 32).decode()
+        assert padded.endswith("=")
+
+        assert _normalize_ssh_fingerprint(f"SHA256:{padded}") == f"SHA256:{padded}"
 
 
 class TestMD5Fingerprints:
