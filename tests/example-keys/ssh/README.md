@@ -1,8 +1,14 @@
 # SSH Test Keys
 
-This directory contains example SSH keys generated for testing the
+This directory contains example SSH public keys generated for testing the
 `tag-validate` CLI tool's SSH key fingerprint parsing and normalization
 capabilities.
+
+The matching private keys are **not** committed. They were unencrypted
+OpenSSH keys, which every secret-scanning tool flags on sight, and nothing
+in the test suite read them: the tests and the shell script work from the
+fingerprints recorded below. Regenerate them locally if you need them (see
+[Regenerating Keys](#regenerating-keys)).
 
 ## Generated Keys
 
@@ -10,14 +16,14 @@ The following SSH key types have been generated for testing:
 
 <!-- markdownlint-disable MD013 -->
 
-| Key Type | Bit Size | Private Key File | Public Key File      | Description                    |
-| -------- | -------- | ---------------- | -------------------- | ------------------------------ |
-| RSA      | 2048     | `test_rsa_2048`  | `test_rsa_2048.pub`  | Standard RSA 2048-bit key      |
-| RSA      | 4096     | `test_rsa_4096`  | `test_rsa_4096.pub`  | High-security RSA 4096-bit key |
-| ECDSA    | 256      | `test_ecdsa_256` | `test_ecdsa_256.pub` | ECDSA P-256 curve              |
-| ECDSA    | 384      | `test_ecdsa_384` | `test_ecdsa_384.pub` | ECDSA P-384 curve              |
-| ECDSA    | 521      | `test_ecdsa_521` | `test_ecdsa_521.pub` | ECDSA P-521 curve              |
-| Ed25519  | 256      | `test_ed25519`   | `test_ed25519.pub`   | Modern Ed25519 curve           |
+| Key Type | Bit Size | Public Key File      | Description                    |
+| -------- | -------- | -------------------- | ------------------------------ |
+| RSA      | 2048     | `test_rsa_2048.pub`  | Standard RSA 2048-bit key      |
+| RSA      | 4096     | `test_rsa_4096.pub`  | High-security RSA 4096-bit key |
+| ECDSA    | 256      | `test_ecdsa_256.pub` | ECDSA P-256 curve              |
+| ECDSA    | 384      | `test_ecdsa_384.pub` | ECDSA P-384 curve              |
+| ECDSA    | 521      | `test_ecdsa_521.pub` | ECDSA P-521 curve              |
+| Ed25519  | 256      | `test_ed25519.pub`   | Modern Ed25519 curve           |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -71,7 +77,7 @@ that the `tag-validate` CLI tool can:
 ⚠️ **These are test keys for testing purposes!**
 
 - All keys were generated with empty passphrases for testing purposes
-- Private keys are included in this repository for completeness
+- The public halves live in this repository; the private keys do not
 - **NEVER use these keys for actual authentication or signing**
 - These keys are not registered with any GitHub accounts
 - The keys will fail GitHub verification (which is expected for testing)
@@ -96,9 +102,13 @@ ssh-keygen -t ed25519 -N "" -f test_ed25519 -C "test_ed25519"
 
 ## Regenerating Keys
 
-If you need to regenerate the test keys (e.g., for security reasons or testing updates):
+If you need to regenerate the test keys (e.g., for security reasons or testing
+updates):
 
-1. Delete all existing key files: `rm -f test_*`
-2. Run the generation commands above
-3. Update the fingerprints in this README
-4. Update the test script with new fingerprint values
+1. Delete the existing public keys: `rm -f test_*.pub`
+2. Run the generation commands above in a directory outside the repository
+3. Copy the `.pub` files back into this directory, leaving the private
+   keys where they are
+4. Update the fingerprints in this README, reading them with
+   `ssh-keygen -lf <key>.pub` and `ssh-keygen -E md5 -lf <key>.pub`
+5. Update the test script and unit tests with the new fingerprint values

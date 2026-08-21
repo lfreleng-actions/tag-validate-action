@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from .models import ValidationResult
+from .tag_operations import TagLocationError
 from .workflow_clone import WorkflowCloneMixin
 from .workflow_types import _TagLocationRequest
 
@@ -110,7 +111,18 @@ class WorkflowLocationMixin(WorkflowCloneMixin):
         """
         try:
             owner, repo, tag = self.operations.parse_tag_location(tag_location)
-            logger.debug(f"Parsed location: {owner}/{repo}@{tag}")
+        except TagLocationError as e:
+            logger.error(f"Failed to validate remote tag: {e}")
+            result = self._failed_result(
+                tag_location, f"Failed to validate remote tag: {e}"
+            )
+            result.add_info(
+                "Expected format: 'owner/repo@tag' (e.g., 'torvalds/linux@v6.0')"
+            )
+            return result
+
+        logger.debug(f"Parsed location: {owner}/{repo}@{tag}")
+        try:
             return await self._clone_and_validate(
                 owner,
                 repo,
@@ -120,15 +132,9 @@ class WorkflowLocationMixin(WorkflowCloneMixin):
             )
         except Exception as e:
             logger.error(f"Failed to validate remote tag: {e}")
-            result = self._failed_result(
+            return self._failed_result(
                 tag_location, f"Failed to validate remote tag: {e}"
             )
-            # Provide helpful context
-            if "parse_tag_location" in str(e):
-                result.add_info(
-                    "Expected format: 'owner/repo@tag' (e.g., 'torvalds/linux@v6.0')"
-                )
-            return result
 
     async def _validate_ambiguous_tag_location(
         self,

@@ -10,6 +10,7 @@ owners supplied as email addresses to usernames.
 """
 
 import base64
+import binascii
 import re
 
 # SSH public key algorithm prefixes recognised for key type detection
@@ -35,7 +36,8 @@ def _validate_sha256_fingerprint(normalized: str) -> None:
         normalized: Fingerprint beginning with the ``SHA256:`` prefix
 
     Raises:
-        ValueError: If the fingerprint is empty or not valid Base64
+        ValueError: If the fingerprint is empty, not valid Base64, or does
+            not decode to 32 bytes
     """
     # Check if it's just empty hash
     if normalized.upper() == "SHA256:":
@@ -45,18 +47,23 @@ def _validate_sha256_fingerprint(normalized: str) -> None:
     if not hash_part:
         raise ValueError("SHA256 fingerprint cannot be empty")
     try:
-        # Validate Base64 format (SHA256 hash should be 32 bytes = 43-44 chars in base64)
-        decoded = base64.b64decode(
-            hash_part + "==", validate=True
-        )  # Add padding for validation
-        if len(decoded) != 32:
-            raise ValueError(
-                f"SHA256 fingerprint has invalid length: expected 32 bytes, got {len(decoded)}"
-            )
-    except Exception as exc:
+        # Validate Base64 format (SHA256 hash should be 32 bytes = 43-44 chars
+        # in base64). Add only the padding the value is missing: an
+        # unconditional "==" makes correctly padded input invalid, and
+        # rejects over-padded input on some Python versions but not others.
+        padding = "=" * (-len(hash_part) % 4)
+        decoded = base64.b64decode(hash_part + padding, validate=True)
+    except (binascii.Error, ValueError) as exc:
         raise ValueError(
             f"SHA256 fingerprint contains invalid Base64 characters: {hash_part}"
         ) from exc
+
+    # Kept outside the try: a length fault is not an encoding fault, and
+    # reporting it as one sends the user looking for the wrong problem.
+    if len(decoded) != 32:
+        raise ValueError(
+            f"SHA256 fingerprint has invalid length: expected 32 bytes, got {len(decoded)}"
+        )
 
 
 def _validate_md5_fingerprint(normalized: str) -> None:

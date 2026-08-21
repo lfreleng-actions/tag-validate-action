@@ -29,6 +29,8 @@ Test Categories:
 - TestCLIIntegration: Unit test vs CLI behavior verification
 """
 
+import base64
+
 import pytest
 
 from tag_validate.cli import _normalize_ssh_fingerprint
@@ -133,20 +135,6 @@ class TestSHA256Fingerprints:
                 "ECDSA:SHA256:Invalid!",
                 "SHA256 fingerprint contains invalid Base64 characters",
             ),
-            # Wrong length (too short)
-            (
-                "SHA256:TooShort",
-                "SHA256 fingerprint contains invalid Base64 characters",
-            ),
-            (
-                "SHA256:VeryShort123",
-                "SHA256 fingerprint contains invalid Base64 characters",
-            ),
-            # Wrong length (too long)
-            (
-                "SHA256:ThisIsTooLongForASHA256FingerprintAndShouldFail12345",
-                "SHA256 fingerprint contains invalid Base64 characters",
-            ),
         ]
 
         for invalid_input, expected_error_msg in invalid_cases:
@@ -154,6 +142,31 @@ class TestSHA256Fingerprints:
                 _normalize_ssh_fingerprint(invalid_input)
             assert expected_error_msg in str(exc_info.value), (
                 f"Failed for input: {invalid_input}"
+            )
+
+    def test_wrong_length_sha256_reports_length_not_encoding(self):
+        """Test that valid Base64 of the wrong length names the real fault."""
+        wrong_length_cases = [
+            # Too short
+            ("SHA256:TooShort", 6),
+            ("SHA256:VeryShort123", 9),
+            # Already padded: 16 bytes encoded as "eHh4...eA=="
+            (f"SHA256:{base64.b64encode(b'x' * 16).decode()}", 16),
+            # Unpadded form of the same value
+            (f"SHA256:{base64.b64encode(b'x' * 16).decode().rstrip('=')}", 16),
+            # Too long
+            ("SHA256:ThisIsTooLongForASHA256FingerprintAndShouldFail12345", 39),
+        ]
+
+        for invalid_input, decoded_length in wrong_length_cases:
+            with pytest.raises(ValueError) as exc_info:
+                _normalize_ssh_fingerprint(invalid_input)
+            message = str(exc_info.value)
+            assert (
+                f"invalid length: expected 32 bytes, got {decoded_length}" in message
+            ), f"Failed for input: {invalid_input}"
+            assert "invalid Base64 characters" not in message, (
+                f"Encoding blamed for a length fault: {invalid_input}"
             )
 
 

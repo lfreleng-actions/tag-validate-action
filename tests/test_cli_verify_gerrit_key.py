@@ -457,7 +457,9 @@ class TestVerifyGerritJSON:
         """Test JSON output when account is not found."""
         mock_client = AsyncMock()
         mock_client_class.return_value.__aenter__.return_value = mock_client
-        mock_client_class.return_value.__aexit__.return_value = AsyncMock()
+        # __aexit__ must be falsy: a truthy return suppresses exceptions
+        # raised inside the async with block.
+        mock_client_class.return_value.__aexit__.return_value = False
 
         mock_client.lookup_account_by_email.return_value = None
 
@@ -475,16 +477,11 @@ class TestVerifyGerritJSON:
         )
 
         assert result.exit_code != 0
-        # Parse only the first JSON object (may have extra output after errors)
-        try:
-            lines = result.stdout.strip().split("\n")
-            json_line = next(line for line in lines if line.strip().startswith("{"))
-            output = json.loads(json_line)
-            assert output["success"] is False
-            assert "error" in output
-        except (json.JSONDecodeError, StopIteration):
-            # If JSON parsing fails, just check that the command failed
-            assert result.exit_code != 0
+        # Exactly one JSON document must be emitted, otherwise consumers of
+        # --json cannot parse this path at all.
+        output = json.loads(result.stdout)
+        assert output["success"] is False
+        assert output["error"] == f"Gerrit account not found for '{SAMPLE_EMAIL}'"
 
 
 class TestVerifyGerritServerDiscovery:
