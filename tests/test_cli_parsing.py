@@ -85,3 +85,44 @@ class TestNormalizeTagLocationRemote:
         url = "https://github.com/owner/repo@v1.0.0"
 
         assert normalize_tag_location(url) == url
+
+
+class TestNormalizeTagLocationBasePath:
+    """Detection honours an explicit base directory.
+
+    ``verify --path`` configures the workflow with a repository path that
+    need not be the working directory. Normalization has to consult the
+    same directory, or the two disagree about whether a location is local.
+    """
+
+    def test_local_repo_found_under_base_path(self, workdir, tmp_path_factory):
+        """A repo under the base path is detected from elsewhere."""
+        elsewhere = tmp_path_factory.mktemp("elsewhere")
+        _make_repo(elsewhere, "nested/repo")
+
+        assert normalize_tag_location("nested/repo/v1.0.0", base_path=elsewhere) == (
+            "nested/repo/v1.0.0"
+        )
+
+    def test_absent_under_base_path_is_remote(self, workdir, tmp_path_factory):
+        """Absent from the base path, the location is still remote."""
+        elsewhere = tmp_path_factory.mktemp("elsewhere")
+
+        assert normalize_tag_location("owner/repo/v1.0.0", base_path=elsewhere) == (
+            "owner/repo@v1.0.0"
+        )
+
+    def test_base_path_not_the_working_directory(self, workdir, tmp_path_factory):
+        """A repo in the CWD does not count when a base path is given."""
+        _make_repo(workdir, "nested/repo")
+        elsewhere = tmp_path_factory.mktemp("elsewhere")
+
+        assert normalize_tag_location("nested/repo/v1.0.0", base_path=elsewhere) == (
+            "nested/repo@v1.0.0"
+        )
+
+    def test_defaults_to_working_directory(self, workdir):
+        """Omitting the base path preserves the previous behaviour."""
+        _make_repo(workdir, "nested/repo")
+
+        assert normalize_tag_location("nested/repo/v1.0.0") == "nested/repo/v1.0.0"

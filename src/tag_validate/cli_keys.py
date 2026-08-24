@@ -25,7 +25,11 @@ SSH_KEY_PREFIXES = [
     "sk-ecdsa-sha2-nistp256@openssh.com",
 ]
 
-SHA256_FINGERPRINT_PATTERN = r"^SHA256:([A-Za-z0-9+/]{43}=?|[A-Za-z0-9+/]{44})$"
+# A SHA256 hash is 32 bytes, which Base64-encodes to 43 data characters plus
+# one padding character. Accepting 44 data characters would admit values that
+# decode to 33 bytes, bypassing the length check in
+# _validate_sha256_fingerprint().
+SHA256_FINGERPRINT_PATTERN = r"^SHA256:[A-Za-z0-9+/]{43}=?$"
 MD5_FINGERPRINT_PATTERN = r"^MD5:([0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}$"
 
 

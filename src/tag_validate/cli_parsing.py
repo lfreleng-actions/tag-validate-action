@@ -122,17 +122,27 @@ def check_version_type_match(version_type: str, required_types: list[str]) -> bo
     return version_type in required_types
 
 
-def _looks_like_local_repository(repo_path: str) -> bool:
-    """Return True when ``repo_path`` resolves to a local Git repository."""
-    # Try both relative to current dir and absolute
-    for base_path in [Path("."), Path.cwd()]:
-        test_path = base_path / repo_path
-        if test_path.is_dir() and (test_path / ".git").exists():
-            return True
-    return False
+def _looks_like_local_repository(
+    repo_path: str, base_path: Path | str | None = None
+) -> bool:
+    """Return True when ``repo_path`` resolves to a local Git repository.
+
+    Args:
+        repo_path: Candidate repository path, relative or absolute
+        base_path: Directory relative paths resolve against; defaults to
+            the current working directory
+
+    Returns:
+        bool: True if the path holds a Git repository
+    """
+    base = Path(base_path) if base_path is not None else Path.cwd()
+    candidate = base / repo_path
+    return candidate.is_dir() and (candidate / ".git").exists()
 
 
-def normalize_tag_location(tag_location: str) -> str:
+def normalize_tag_location(
+    tag_location: str, base_path: Path | str | None = None
+) -> str:
     """Normalize tag location with smart path detection.
 
     Handles multiple input formats with pragmatic fallback:
@@ -150,6 +160,10 @@ def normalize_tag_location(tag_location: str) -> str:
 
     Args:
         tag_location: The tag location in various formats
+        base_path: Directory relative paths resolve against. Pass the
+            repository path the workflow was configured with, so both
+            resolve an ambiguous location against the same directory.
+            Defaults to the current working directory.
 
     Returns:
         str: Normalized tag location
@@ -176,7 +190,7 @@ def normalize_tag_location(tag_location: str) -> str:
     # Ambiguous: 'owner/repo/tag' and 'path/to/repo/tag' are syntactically
     # identical, so filesystem state is the only discriminator. Check for a
     # local repository before assuming remote.
-    if _looks_like_local_repository(tag_location.rsplit("/", 1)[0]):
+    if _looks_like_local_repository(tag_location.rsplit("/", 1)[0], base_path):
         logger.debug(f"Detected local repository path: {tag_location}")
         return tag_location
 
