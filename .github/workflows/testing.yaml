@@ -728,10 +728,16 @@ jobs:
             echo "Warning: SSH signature verification failed, continuing test"
           fi
 
+      - name: "Install uv"
+        # yamllint disable-line rule:line-length
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
       - name: "Install Python package"
         shell: bash
         run: |
-          pip install -e .
+          # Hash-pinned via uv.lock; --locked rejects lockfile drift.
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: "Test v0.1.0 with Python CLI (SSH-signed)"
         shell: bash
@@ -1049,17 +1055,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: "Set up Python"
+      - name: "Install uv"
         # yamllint disable-line rule:line-length
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           python-version: '3.11'
 
       - name: "Install package with dev dependencies"
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          # Hash-pinned via uv.lock; --locked rejects lockfile drift.
+          uv sync --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: "Test SemVer validation"
         shell: bash
@@ -1151,9 +1158,9 @@ jobs:
           persist-credentials: false
           path: action-code
 
-      - name: "Set up Python"
+      - name: "Install uv"
         # yamllint disable-line rule:line-length
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           python-version: '3.11'
 
@@ -1161,8 +1168,9 @@ jobs:
         shell: bash
         working-directory: action-code
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          # Hash-pinned via uv.lock; --locked rejects lockfile drift.
+          uv sync --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: "Import GPG test key for signature verification"
         id: import-gpg
@@ -1345,17 +1353,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: "Set up Python"
+      - name: "Install uv"
         # yamllint disable-line rule:line-length
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           python-version: '3.11'
 
       - name: "Install package with dev dependencies"
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          # Hash-pinned via uv.lock; --locked rejects lockfile drift.
+          uv sync --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: "Test tag location parsing"
         shell: bash

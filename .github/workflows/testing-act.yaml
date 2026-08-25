@@ -32,12 +32,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: "Install uv"
+        # yamllint disable-line rule:line-length
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
       - name: "Install Python package"
         shell: bash
         run: |
-          python3 --version
-          pip --version
-          pip install --break-system-packages --ignore-installed -e .
+          uv --version
+          # Hash-pinned via uv.lock; --locked rejects lockfile drift.
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       # ====================================================================
       # STRING VALIDATION TESTS
