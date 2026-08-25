@@ -79,6 +79,8 @@ tag-validate = "tag_validate.cli:app"
 constraint-dependencies = [
   # CVE-2026-59890 (GHSA-h35f-9h28-mq5c): pulled in transitively via pbr
   "setuptools>=83.0.0",
+  # CVE-2026-7246 (GHSA-47fr-3ffg-hgmw): pulled in transitively via black
+  "click>=8.3.3",
 ]
 
 # Hatch dynamic versioning from VCS (tags)
