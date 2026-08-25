@@ -35,6 +35,9 @@ jobs:
       - name: "Install uv"
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          # Pin the installer too; the action SHA alone leaves uv floating.
+          version: '0.12.5'
 
       - name: "Install Python package"
         shell: bash
