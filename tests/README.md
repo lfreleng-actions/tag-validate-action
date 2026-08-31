@@ -222,6 +222,7 @@ Shared fixtures and configuration:
 import pytest
 from tag_validate.models import SignatureInfo
 
+
 class TestSignatureInfo:
     """Test SignatureInfo model."""
 
@@ -246,6 +247,7 @@ class TestSignatureInfo:
 ```python
 import pytest
 
+
 class TestGitHubKeysClient:
     """Test GitHub API client."""
 
@@ -267,7 +269,7 @@ class TestSignatureDetector:
     async def test_detect_signature(
         self,
         signature_detector,  # From conftest.py
-        git_verify_gpg_output  # From conftest.py
+        git_verify_gpg_output,  # From conftest.py
     ):
         """Test detecting a GPG signature."""
         # Test implementation
@@ -290,16 +292,21 @@ async def test_async_function():
     """Test async function."""
     pass
 
+
 @pytest.mark.integration
 def test_real_api():
     """Test with real API."""
     pass
 
-@pytest.mark.parametrize("version,expected", [
-    ("v1.0.0", True),
-    ("v2.1.3", True),
-    ("invalid", False),
-])
+
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        ("v1.0.0", True),
+        ("v2.1.3", True),
+        ("invalid", False),
+    ],
+)
 def test_version_validation(version, expected):
     """Test version validation."""
     pass

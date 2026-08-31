@@ -445,6 +445,7 @@ from pathlib import Path
 from tag_validate.workflow import ValidationWorkflow
 from tag_validate.models import ValidationConfig
 
+
 async def validate_tag():
     # Configure validation requirements
     config = ValidationConfig(
@@ -473,6 +474,7 @@ async def validate_tag():
             print(f"  • {error}")
 
     return result
+
 
 # Run validation
 result = asyncio.run(validate_tag())
@@ -510,6 +512,7 @@ import asyncio
 from pathlib import Path
 from tag_validate.signature import SignatureDetector
 
+
 async def detect_signature():
     detector = SignatureDetector(Path.cwd())
 
@@ -522,6 +525,7 @@ async def detect_signature():
         print(f"Key ID: {sig_info.key_id}")
         print(f"Signer: {sig_info.signer_email}")
 
+
 asyncio.run(detect_signature())
 ```
 
@@ -531,6 +535,7 @@ asyncio.run(detect_signature())
 import asyncio
 from pathlib import Path
 from tag_validate.tag_operations import TagOperations
+
 
 async def fetch_tag_info():
     ops = TagOperations()
@@ -546,6 +551,7 @@ async def fetch_tag_info():
     owner, repo, tag = ops.parse_tag_location("torvalds/linux@v6.0")
     print(f"Owner: {owner}, Repo: {repo}, Tag: {tag}")
 
+
 asyncio.run(fetch_tag_info())
 ```
 
@@ -554,6 +560,7 @@ asyncio.run(fetch_tag_info())
 ```python
 import asyncio
 from tag_validate.github_keys import GitHubKeysClient
+
 
 async def verify_key():
     async with GitHubKeysClient(token="ghp_...") as client:
@@ -568,6 +575,7 @@ async def verify_key():
         else:
             print("❌ Key not found")
 
+
 asyncio.run(verify_key())
 ```
 
@@ -580,21 +588,17 @@ from tag_validate.models import ValidationConfig
 
 config = ValidationConfig(
     # Version type requirements
-    require_semver=True,      # Require Semantic Versioning
-    require_calver=False,     # Require Calendar Versioning
-
+    require_semver=True,  # Require Semantic Versioning
+    require_calver=False,  # Require Calendar Versioning
     # Signature requirements
-    require_signed=True,      # Require tag to be signed
-    require_unsigned=False,   # Require tag to be unsigned
-
+    require_signed=True,  # Require tag to be signed
+    require_unsigned=False,  # Require tag to be unsigned
     # GitHub verification
-    require_github=True,      # Verify key on GitHub
-
+    require_github=True,  # Verify key on GitHub
     # Version filtering
     reject_development=True,  # Reject alpha/beta/rc versions
-
     # Prefix handling
-    allow_prefix=True,        # Allow 'v' prefix on versions
+    allow_prefix=True,  # Allow 'v' prefix on versions
 )
 ```
 

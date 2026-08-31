@@ -237,6 +237,7 @@ def test_with_semver(self, semver_repo_path: Path):
     # Use SemVer test repository
     pass
 
+
 def test_with_calver(self, calver_repo_path: Path):
     # Use CalVer test repository
     pass
