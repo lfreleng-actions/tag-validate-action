@@ -511,7 +511,7 @@ wheels = [
 
 [[package]]
 name = "dependamerge"
-version = "0.11.7"
+version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiolimiter" },
@@ -524,9 +524,9 @@ dependencies = [
     { name = "typer" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/be/39/2c2554fff6ed1b68a5e68885dc1d4689b152154f5220c7a9f5a3c22a49c6/dependamerge-0.11.7.tar.gz", hash = "sha256:7b3bc7d864b92e042d7befe0d34d60a88c71e9abdd70dd93b23aeb0686d5cf3a", size = 390004, upload-time = "2026-08-26T21:44:20.148Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/4e/3c6f0d7bc6543b7baea8269e7673a0075287d30847dc4a5381c22b1d3cdb/dependamerge-0.12.1.tar.gz", hash = "sha256:39f82562ee0cc007f70f0955bb645e062f6c027b5d437f120a3ef8a3bb254434", size = 434013, upload-time = "2026-09-03T17:47:52.851Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/af/2a/553419d2e8eda340c2f5d05d17b0885db3fa935e0342d7c3699bf25c251d/dependamerge-0.11.7-py3-none-any.whl", hash = "sha256:2ca8a3019e40c495cea535de36784c6b490e854f0eeef345b2ddadea6fbb8855", size = 513851, upload-time = "2026-08-26T21:44:18.623Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/58/c919c2cacd5186306156eca0454dca365b6c3d64a9c00c149a0bca640320/dependamerge-0.12.1-py3-none-any.whl", hash = "sha256:b3be5918a25d5685f56c99acb9271fb6d9b30b0189386a5c6a9a7ef6342094e2", size = 564041, upload-time = "2026-09-03T17:47:50.871Z" },
 ]
 
 [[package]]
