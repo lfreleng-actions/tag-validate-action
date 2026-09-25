@@ -166,11 +166,15 @@ class TestGetUserGPGKeys:
     async def test_get_gpg_keys_user_not_found(self):
         """Test getting GPG keys for non-existent user."""
         async with GitHubKeysClient(token="test") as client:
-            with patch.object(
-                client._client, "get", new=AsyncMock(side_effect=Exception("Not Found"))
+            with (
+                patch.object(
+                    client._client,
+                    "get",
+                    new=AsyncMock(side_effect=Exception("Not Found")),
+                ),
+                pytest.raises(Exception, match="Not Found"),
             ):
-                with pytest.raises(Exception, match="Not Found"):
-                    await client.get_user_gpg_keys("nonexistent")
+                await client.get_user_gpg_keys("nonexistent")
 
 
 class TestGetUserSSHKeys:
@@ -458,37 +462,43 @@ class TestErrorHandling:
     async def test_rate_limit_error(self):
         """Test handling rate limit errors."""
         async with GitHubKeysClient(token="test") as client:
-            with patch.object(
-                client._client,
-                "get",
-                new=AsyncMock(side_effect=Exception("API rate limit exceeded")),
+            with (
+                patch.object(
+                    client._client,
+                    "get",
+                    new=AsyncMock(side_effect=Exception("API rate limit exceeded")),
+                ),
+                pytest.raises(Exception, match="API rate limit exceeded"),
             ):
-                with pytest.raises(Exception, match="API rate limit exceeded"):
-                    await client.get_user_gpg_keys("testuser")
+                await client.get_user_gpg_keys("testuser")
 
     @pytest.mark.asyncio
     async def test_unauthorized_error(self):
         """Test handling unauthorized errors."""
         async with GitHubKeysClient(token="invalid") as client:
-            with patch.object(
-                client._client,
-                "get",
-                new=AsyncMock(side_effect=Exception("Bad credentials")),
+            with (
+                patch.object(
+                    client._client,
+                    "get",
+                    new=AsyncMock(side_effect=Exception("Bad credentials")),
+                ),
+                pytest.raises(Exception, match="Bad credentials"),
             ):
-                with pytest.raises(Exception, match="Bad credentials"):
-                    await client.get_user_gpg_keys("testuser")
+                await client.get_user_gpg_keys("testuser")
 
     @pytest.mark.asyncio
     async def test_network_error(self):
         """Test handling network errors."""
         async with GitHubKeysClient(token="test") as client:
-            with patch.object(
-                client._client,
-                "get",
-                new=AsyncMock(side_effect=Exception("Network error")),
+            with (
+                patch.object(
+                    client._client,
+                    "get",
+                    new=AsyncMock(side_effect=Exception("Network error")),
+                ),
+                pytest.raises(Exception, match="Network error"),
             ):
-                with pytest.raises(Exception, match="Network error"):
-                    await client.get_user_gpg_keys("testuser")
+                await client.get_user_gpg_keys("testuser")
 
 
 class TestIntegration:
