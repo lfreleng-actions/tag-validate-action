@@ -218,7 +218,7 @@ jobs:
     steps:
       # Don't import key - tests gpg-unverifiable path
       - name: "Test GPG signature detection"
-        uses: ./
+        uses: $/
         id: gpg-test
         with:
           tag_location: test-repo/v1.0.0
@@ -244,7 +244,7 @@ jobs:
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: "Test GPG signature verification"
-        uses: ./
+        uses: $/
         id: gpg-test
         with:
           tag_location: test-repo/v1.0.0
