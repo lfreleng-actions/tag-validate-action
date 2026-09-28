@@ -14,6 +14,9 @@
 # keys such as output["key_verifications"] as deployment-specific
 # provider/tenant identifiers; this codebase has no such IDs and
 # secrets detection stays active via the security engine.
+ci:
+  failBelow: 100
+
 rules:
   ai-slop/meta-comment: "off"
   ai-slop/narrative-comment: "off"
