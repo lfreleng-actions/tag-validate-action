@@ -1018,6 +1018,92 @@ jobs:
         env:
           VERSION_PREFIX: ${{ steps.uppercase-v.outputs.version_prefix }}
 
+  ### Test Python Runs Only The Action's Own Code ###
+  test-workspace-isolation:
+    name: "Test Workspace Isolation"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # The action runs with the workspace as its working directory.
+      # Each file below records its import in planted-ran and exits;
+      # none of them may be loaded by the action's Python calls.
+      - name: "Plant Python modules in the workspace"
+        shell: bash
+        run: |
+          set -euo pipefail
+          planted='import os
+          import sys
+
+          marker = os.path.join(os.environ["RUNNER_TEMP"], "planted-ran")
+          with open(marker, "a") as handle:
+              handle.write(__name__ + "\n")
+          sys.exit(97)
+          '
+          mkdir -p tag_validate
+          for target in sitecustomize.py secrets.py datetime.py \
+            tag_validate/__init__.py; do
+            printf '%s' "${planted}" > "${target}"
+          done
+
+      - name: "Validate tag string with planted modules present"
+        uses: $/
+        id: planted-string
+        with:
+          tag_string: "v1.2.3"
+          require_type: semver
+
+      - name: "Verify remote tag with planted modules present"
+        uses: $/
+        id: planted-remote
+        with:
+          tag_location: >-
+            lfreleng-actions/test-tags-semantic/v0.1.2-unsigned
+          require_type: semver
+          json_upload_format: both
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Verify outputs and that no planted module ran"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e "${RUNNER_TEMP}/planted-ran" ]; then
+            echo "Error: the action imported modules from the workspace:"
+            cat "${RUNNER_TEMP}/planted-ran"
+            exit 1
+          fi
+          if [ -n "${PYTHONPATH:-}" ]; then
+            echo "Error: the action exported PYTHONPATH=${PYTHONPATH}"
+            exit 1
+          fi
+          if [ "${STRING_VALID}" != "true" ] || \
+            [ "${STRING_TYPE}" != "semver" ] || \
+            [ "${STRING_TAG}" != "v1.2.3" ]; then
+            echo "Error: unexpected tag_string outputs:" \
+              "${STRING_VALID} ${STRING_TYPE} ${STRING_TAG}"
+            exit 1
+          fi
+          if [ "${REMOTE_VALID}" != "true" ] || \
+            [ "${REMOTE_TAG}" != "v0.1.2-unsigned" ]; then
+            echo "Error: unexpected tag_location outputs:" \
+              "${REMOTE_VALID} ${REMOTE_TAG}"
+            exit 1
+          fi
+          jq -e '.success == true' \
+            "${STRING_ARTIFACT}/tag-validation-pretty.json"
+          jq -e '.tag_name == "v0.1.2-unsigned"' \
+            "${REMOTE_ARTIFACT}/tag-validation-pretty.json"
+          echo "✓ Only the action's own Python code ran"
+        env:
+          STRING_VALID: ${{ steps.planted-string.outputs.valid }}
+          STRING_TYPE: ${{ steps.planted-string.outputs.tag_type }}
+          STRING_TAG: ${{ steps.planted-string.outputs.tag_name }}
+          STRING_ARTIFACT: ${{ steps.planted-string.outputs.artifact_path }}
+          REMOTE_VALID: ${{ steps.planted-remote.outputs.valid }}
+          REMOTE_TAG: ${{ steps.planted-remote.outputs.tag_name }}
+          REMOTE_ARTIFACT: ${{ steps.planted-remote.outputs.artifact_path }}
+
   ### Summary ###
   ### Python Package Tests ###
   test-python-validation:
@@ -1412,6 +1498,7 @@ jobs:
       - test-development-tags
       - test-input-priority
       - test-edge-cases
+      - test-workspace-isolation
       - test-python-validation
       - test-python-signature-detection
       - test-python-tag-operations
@@ -1433,6 +1520,7 @@ jobs:
             echo "✅ Development tag tests"
             echo "✅ Input priority tests"
             echo "✅ Edge case tests"
+            echo "✅ Workspace isolation tests"
             echo ""
             echo "### Python Package Tests"
             echo "✅ Python version validation tests"

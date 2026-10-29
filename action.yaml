@@ -239,20 +239,11 @@ runs:
     - name: 'Install local dependencies'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
       shell: bash
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: | # zizmor: ignore[github-env]
-        # Install dependencies without the package itself to avoid setuptools-scm issues
+      run: |
+        # Install dependencies without the package itself to avoid setuptools-scm issues.
+        # The steps that run the local code put src/ on PYTHONPATH
+        # themselves, so nothing is exported to the caller's later steps.
         pip install "dependamerge>=0.1.19" "aiolimiter>=1.2.1" "httpx[http2]>=0.28.1" "pydantic>=2.12.5" "rich>=14.2.0" "typer>=0.21.1" "python-gnupg>=0.5.3" "cryptography>=46.0.3" "packaging>=24.2" "pygerrit2>=2.0.15"
-        # Add the source directory to PYTHONPATH for direct module access.
-        # ACTION_PATH originates from github.action_path (trusted), so this
-        # GITHUB_ENV write is required to persist PYTHONPATH across steps.
-        # Strip any CR/LF from the inherited PYTHONPATH first to prevent
-        # newline-based env-file injection into GITHUB_ENV.
-        SAFE_PYTHONPATH="${PYTHONPATH:-}"
-        SAFE_PYTHONPATH="${SAFE_PYTHONPATH//$'\r'/}"
-        SAFE_PYTHONPATH="${SAFE_PYTHONPATH//$'\n'/}"
-        echo "PYTHONPATH=${ACTION_PATH}/src:${SAFE_PYTHONPATH}" >> "$GITHUB_ENV"
 
     - name: 'Verify Python module import'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
@@ -260,14 +251,20 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
+        # -P keeps the working directory (the caller's workspace) off
+        # sys.path; PYTHONPATH supplies src/ and nothing else, so an
+        # inherited value with an empty entry cannot add the working
+        # directory back. The installed dependencies are in site-packages,
+        # which PYTHONPATH does not affect. Python is 3.12 (set up above).
+        export PYTHONPATH="${ACTION_PATH}/src"
         # Test if the Python module can be imported
         echo "🔍 Testing Python module import..."
         echo "PYTHONPATH: ${PYTHONPATH}"
         echo "Python sys.path:"
-        python -c "import sys; print('\n'.join(sys.path))"
+        python -P -c "import sys; print('\n'.join(sys.path))"
         echo ""
         echo "Attempting to import tag_validate module..."
-        python -c "import tag_validate; print('✅ tag_validate module imported successfully'); import tag_validate; print('Module location:', tag_validate.__file__)" || {
+        python -P -c "import tag_validate; print('✅ tag_validate module imported successfully'); import tag_validate; print('Module location:', tag_validate.__file__)" || {
           echo "❌ Failed to import tag_validate module" >&2
           echo "Directory contents of src/:" >&2
           ls -la "${ACTION_PATH}/src/" || echo "src/ directory not found" >&2
@@ -277,7 +274,7 @@ runs:
         }
         echo ""
         echo "Testing CLI entry point..."
-        python -m tag_validate.cli --version || {
+        python -P -m tag_validate.cli --version || {
           echo "❌ Failed to run CLI --version" >&2
           exit 1
         }
@@ -481,7 +478,11 @@ runs:
         # Determine which CLI invocation method to use
         if [[ "${USE_LOCAL_ACTION}" == "true" ]] || \
            [[ "${GITHUB_REPOSITORY}" =~ lfreleng-actions/tag-validate-action ]]; then
-          CLI_CMD="python -m tag_validate.cli"
+          # -P keeps the working directory off sys.path, so src/ on
+          # PYTHONPATH provides tag_validate; only src/, as above.
+          # Python is 3.12 (set up above).
+          export PYTHONPATH="${ACTION_PATH}/src"
+          CLI_CMD="python -P -m tag_validate.cli"
           echo "Using local action code: ${CLI_CMD}"
         else
           # Use PyPI package via uvx
@@ -563,7 +564,7 @@ runs:
 
         # Generate artifact suffix (timestamp + random hex for uniqueness)
         if [ "${UPLOAD_JSON}" = "true" ]; then
-          ARTIFACT_SUFFIX=$(python3 -c "
+          ARTIFACT_SUFFIX=$(python3 -I -c "
         import secrets
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
@@ -582,15 +583,15 @@ runs:
               echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
               ;;
             pretty)
-              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
             both)
               echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
-              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
             *)
               echo "Warning: Invalid json_upload_format '${JSON_UPLOAD_FORMAT}', defaulting to 'pretty'" >&2
-              echo "${JSON_OUTPUT}" | python3 -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
           esac
 
@@ -691,10 +692,11 @@ runs:
         PYEOF
 
         # Execute the Python script with JSON output and exit code as arguments
-        python /tmp/parse_output.py "${JSON_OUTPUT:-}" "${EXIT_CODE}" "${ARTIFACT_DIR:-}" "${ARTIFACT_SUFFIX:-}"
+        python -I /tmp/parse_output.py "${JSON_OUTPUT:-}" "${EXIT_CODE}" "${ARTIFACT_DIR:-}" "${ARTIFACT_SUFFIX:-}"
 
         # Exit code is already set by Python script above
       env:
+        ACTION_PATH: ${{ github.action_path }}
         GITHUB_TOKEN: ${{ inputs.token }}
         GITHUB_SERVER_URL: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}
         GERRIT_USERNAME: ${{ inputs.gerrit_username || env.GERRIT_USERNAME }}
