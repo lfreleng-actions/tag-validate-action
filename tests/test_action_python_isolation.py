@@ -33,8 +33,8 @@ ACTION_YAML = REPO_ROOT / "action.yaml"
 # Imported by the Python calls in action.yaml after start-up;
 # sitecustomize runs at start-up when the working directory is on
 # PYTHONPATH.
-PLANTED_MODULES = ("sitecustomize", "secrets", "datetime")
-PLANTED_PACKAGES = ("tag_validate",)
+PLANTED_MODULES = ("sitecustomize", "secrets", "datetime", "re")
+PLANTED_PACKAGES = ("tag_validate", "json")
 
 PLANTED_SOURCE = """\
 import os
@@ -273,3 +273,42 @@ def test_local_code_steps_ignore_inherited_empty_pythonpath(
         assert result.returncode == 0, f"{step_name}: {result.stdout}{result.stderr}"
         assert runner.planted_imports() == "", step_name
     _assert_semver_outputs(runner)
+
+
+# Closes a ''' string and appends to the marker file if run as Python;
+# also holds a backslash and a newline.
+QUOTED_TAG = (
+    "v1'''+str(open(__import__('os').environ['PLANTED_MARKER'], 'a')"
+    ".write('report text ran'))+'''\\b\nc"
+)
+
+
+def test_json_check_reads_report_as_data(runner: ActionRunner) -> None:
+    """A report with ''', a backslash and a newline passes, running nothing."""
+    report = json.dumps(
+        {"success": True, "version": QUOTED_TAG, "detected_type": "other"}
+    )
+    runner.inputs.update({"INPUTS_TAG_STRING": QUOTED_TAG, "INPUTS_REQUIRE_TYPE": ""})
+    runner.set_report(report)
+
+    result = runner.run("Validate tag", repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Invalid JSON" not in result.stderr
+    assert runner.planted_imports() == ""
+    pretty = Path(runner.outputs()["artifact_path"]) / "tag-validation-pretty.json"
+    assert json.loads(pretty.read_text(encoding="utf-8")) == json.loads(report)
+
+
+def test_invalid_json_disables_upload(runner: ActionRunner) -> None:
+    """A report that is not JSON skips the artefact with the usual warning."""
+    runner.set_report('{"success": true, "version": "v1.2.3"')
+
+    result = runner.run("Validate tag", repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Warning: Invalid JSON for artifact upload" in result.stderr
+    assert "Continuing without artifact upload..." in result.stderr
+    assert runner.outputs()["artifact_path"] == ""
+    assert not list(runner.runner_temp.glob("tag-validate-*"))
+    assert runner.planted_imports() == ""
