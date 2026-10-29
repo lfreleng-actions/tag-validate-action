@@ -314,31 +314,30 @@ def test_invalid_json_disables_upload(runner: ActionRunner) -> None:
     assert runner.planted_imports() == ""
 
 
-@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
-def test_setup_uv_ignores_workspace_python_version(tmp_path: Path) -> None:
-    """setup-uv's interpreter lookup does not use the workspace's pin.
-
-    setup-uv runs 'uv python find --directory <workspace>' and starts
-    the interpreter it reports, so this runs that call under the env
-    the action gives the step, with a .python-version in the workspace
-    naming a script that records it ran.
-    """
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    marker = tmp_path / "planted-ran"
-    pinned = workspace / "planted-python"
-    _write_executable(pinned, f'#!/bin/sh\necho uv-pin >> "{marker}"\nexit 1\n')
-    (workspace / ".python-version").write_text(f"{pinned}\n", encoding="utf-8")
-
-    env = dict(os.environ)
-    env.update(
-        {
-            key: str(value)
-            for key, value in (_step("Install uv").get("env") or {}).items()
-        }
+def _setup_uv_lookup(
+    step_env: dict[str, str], workspace: Path, action_dir: Path
+) -> subprocess.CompletedProcess:
+    """Run setup-uv's 'uv python find' as the Install uv step would."""
+    # setup-uv's default working-directory is the workspace
+    working_directory = (
+        str(
+            (_step("Install uv").get("with") or {}).get(
+                "working-directory", "${{ github.workspace }}"
+            )
+        )
+        .replace("${{ github.workspace }}", str(workspace))
+        .replace("${{ github.action_path }}", str(action_dir))
     )
-    result = subprocess.run(
-        ["uv", "python", "find", "--directory", str(workspace)],
+    # A runner job has no virtual environment active; the one running
+    # these tests would otherwise be found before any .venv.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"VIRTUAL_ENV", "CONDA_PREFIX"} and not key.startswith("UV_")
+    }
+    env.update(step_env)
+    return subprocess.run(
+        ["uv", "python", "find", "--directory", working_directory],
         cwd=workspace,
         env=env,
         capture_output=True,
@@ -346,5 +345,63 @@ def test_setup_uv_ignores_workspace_python_version(tmp_path: Path) -> None:
         check=False,
     )
 
-    assert not marker.exists(), result.stdout + result.stderr
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
+@pytest.mark.parametrize(
+    "action_inside_workspace",
+    [False, True],
+    ids=["action-outside-workspace", "action-inside-workspace"],
+)
+def test_setup_uv_ignores_workspace_python_version(
+    tmp_path: Path, action_inside_workspace: bool
+) -> None:
+    """setup-uv's interpreter lookup uses nothing from the workspace.
+
+    setup-uv runs 'uv python find --directory <working-directory>' and
+    starts the interpreter it reports, so this runs that call under
+    the env and working-directory the action gives the step. The
+    workspace holds a .python-version naming a script, and a .venv
+    whose interpreters are scripts; each records that it ran. The
+    action directory is outside the workspace, as for a published
+    action, or below it, as for a caller using the action from its own
+    checkout. There the .venv is in a parent of the action directory,
+    and only UV_SYSTEM_PYTHON keeps the lookup from running it, which
+    the test also checks by running the lookup without it.
+    """
+    workspace = tmp_path / "workspace"
+    if action_inside_workspace:
+        action_dir = workspace / "actions" / "tag-validate-action"
+    else:
+        action_dir = tmp_path / "_actions" / "tag-validate-action"
+    venv_bin = workspace / ".venv" / "bin"
+    for directory in (workspace, action_dir, venv_bin):
+        directory.mkdir(parents=True)
+    for name in ("action.yaml", "pyproject.toml"):
+        shutil.copy(REPO_ROOT / name, action_dir / name)
+    marker = tmp_path / "planted-ran"
+    pinned = workspace / "planted-python"
+    _write_executable(pinned, f'#!/bin/sh\necho uv-pin >> "{marker}"\nexit 1\n')
+    (workspace / ".python-version").write_text(f"{pinned}\n", encoding="utf-8")
+    (workspace / ".venv" / "pyvenv.cfg").write_text(
+        "home = /usr/bin\nversion = 3.12.0\n", encoding="utf-8"
+    )
+    for name in ("python", "python3"):
+        _write_executable(
+            venv_bin / name, f'#!/bin/sh\necho workspace-venv >> "{marker}"\nexit 1\n'
+        )
+
+    step_env = {
+        key: str(value) for key, value in (_step("Install uv").get("env") or {}).items()
+    }
+    result = _setup_uv_lookup(step_env, workspace, action_dir)
+
+    planted = marker.read_text(encoding="utf-8") if marker.exists() else ""
+    assert planted == "", result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
+
+    if action_inside_workspace:
+        # Control: without UV_SYSTEM_PYTHON the lookup runs the .venv
+        # interpreter in the action directory's parent.
+        step_env.pop("UV_SYSTEM_PYTHON", None)
+        _setup_uv_lookup(step_env, workspace, action_dir)
+        assert "workspace-venv" in marker.read_text(encoding="utf-8")
