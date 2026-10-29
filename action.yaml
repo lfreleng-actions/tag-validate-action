@@ -234,13 +234,24 @@ runs:
       if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
       uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       env:
-        # setup-uv runs 'uv python find' in the workspace to report a
-        # Python version, and starts the interpreter it finds. Without
-        # this, a .python-version in the caller's checkout chooses that
-        # interpreter. Set on this step alone: later steps are unchanged.
+        # setup-uv runs 'uv python find' to report a Python version, and
+        # starts the interpreter it finds. UV_NO_CONFIG stops uv reading
+        # a .python-version or uv.toml. UV_SYSTEM_PYTHON makes the lookup
+        # skip virtual environments, including a workspace .venv above an
+        # action checked out inside the workspace. Set on this step
+        # alone: later steps are unchanged.
         UV_NO_CONFIG: '1'
+        UV_SYSTEM_PYTHON: '1'
       with:
         enable-cache: false
+        # The lookup above runs in, and searches, this directory and its
+        # parents. That is the action's own checkout, outside the
+        # caller's workspace, so a .venv or .python-version there is
+        # never used. setup-uv also reads uv.toml/pyproject.toml here
+        # for its settings, and exports nothing for this input. The
+        # python-version input would skip the lookup, but exports
+        # UV_PYTHON to every later step of the caller's job.
+        working-directory: ${{ github.action_path }}
 
     - name: 'Install local dependencies'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
