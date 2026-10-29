@@ -233,6 +233,12 @@ runs:
     - name: 'Install uv'
       if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
       uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      env:
+        # setup-uv runs 'uv python find' in the workspace to report a
+        # Python version, and starts the interpreter it finds. Without
+        # this, a .python-version in the caller's checkout chooses that
+        # interpreter. Set on this step alone: later steps are unchanged.
+        UV_NO_CONFIG: '1'
       with:
         enable-cache: false
 

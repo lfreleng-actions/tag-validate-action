@@ -312,3 +312,39 @@ def test_invalid_json_disables_upload(runner: ActionRunner) -> None:
     assert runner.outputs()["artifact_path"] == ""
     assert not list(runner.runner_temp.glob("tag-validate-*"))
     assert runner.planted_imports() == ""
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
+def test_setup_uv_ignores_workspace_python_version(tmp_path: Path) -> None:
+    """setup-uv's interpreter lookup does not use the workspace's pin.
+
+    setup-uv runs 'uv python find --directory <workspace>' and starts
+    the interpreter it reports, so this runs that call under the env
+    the action gives the step, with a .python-version in the workspace
+    naming a script that records it ran.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = tmp_path / "planted-ran"
+    pinned = workspace / "planted-python"
+    _write_executable(pinned, f'#!/bin/sh\necho uv-pin >> "{marker}"\nexit 1\n')
+    (workspace / ".python-version").write_text(f"{pinned}\n", encoding="utf-8")
+
+    env = dict(os.environ)
+    env.update(
+        {
+            key: str(value)
+            for key, value in (_step("Install uv").get("env") or {}).items()
+        }
+    )
+    result = subprocess.run(
+        ["uv", "python", "find", "--directory", str(workspace)],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert not marker.exists(), result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
