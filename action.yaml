@@ -554,8 +554,9 @@ runs:
 
         # Handle JSON artifact upload if enabled
         if [ "${UPLOAD_JSON}" = "true" ] && [ -n "${JSON_OUTPUT:-}" ]; then
-          # Validate JSON using Python
-          python3 -c "import json; json.loads('''${JSON_OUTPUT}''')" 2>/dev/null || {
+          # Validate JSON using Python. The report is passed on stdin, never
+          # as program text: it holds the tag, which may contain quotes.
+          printf '%s' "${JSON_OUTPUT}" | python3 -I -c 'import json, sys; json.load(sys.stdin)' 2>/dev/null || {
             echo "Warning: Invalid JSON for artifact upload" >&2
             echo "Continuing without artifact upload..." >&2
             UPLOAD_JSON="false"
