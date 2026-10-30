@@ -45,9 +45,13 @@ with open(os.environ["PLANTED_MARKER"], "a", encoding="utf-8") as marker:
 sys.exit(97)
 """
 
+# The stubs log the PYTHONPATH they were started with: pip and the
+# uvx console script are Python programs run as scripts, so an empty
+# entry there would put the workspace on their sys.path.
 STUB_UVX = """\
 #!/usr/bin/env bash
 # Stand-in for the PyPI CLI: copy STUB_REPORT to the --json-file path.
+printf 'uvx %s\\n' "${PYTHONPATH-<unset>}" >> "${STUB_ENV_LOG}"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--json-file" ]; then
     cp "${STUB_REPORT}" "$2"
@@ -59,6 +63,7 @@ done
 STUB_PIP = """\
 #!/usr/bin/env bash
 # The test interpreter already has the action's dependencies.
+printf 'pip %s\\n' "${PYTHONPATH-<unset>}" >> "${STUB_ENV_LOG}"
 exit 0
 """
 
@@ -115,6 +120,7 @@ class ActionRunner:
         for path in (self.github_env, self.github_output, self.step_summary):
             path.touch()
         self.report = tmp_path / "report.json"
+        self.stub_env_log = tmp_path / "stub-env"
 
         # python/python3 resolve to the test interpreter, which has the
         # action's dependencies installed. A wrapper rather than a
@@ -158,6 +164,7 @@ class ActionRunner:
             "ACTION_PATH": str(REPO_ROOT),
             "PLANTED_MARKER": str(self.marker),
             "STUB_REPORT": str(self.report),
+            "STUB_ENV_LOG": str(self.stub_env_log),
         }
         env.update(self.exported)
         env.update(self.inputs)
@@ -184,6 +191,12 @@ class ActionRunner:
 
     def outputs(self) -> dict[str, str]:
         return _read_key_values(self.github_output)
+
+    def stub_pythonpaths(self) -> list[str]:
+        """The PYTHONPATH each pip or uvx stub call was started with."""
+        if not self.stub_env_log.exists():
+            return []
+        return self.stub_env_log.read_text(encoding="utf-8").splitlines()
 
 
 @pytest.fixture
@@ -272,6 +285,36 @@ def test_local_code_steps_ignore_inherited_empty_pythonpath(
         result = runner.run(step_name, repository="example-org/caller")
         assert result.returncode == 0, f"{step_name}: {result.stdout}{result.stderr}"
         assert runner.planted_imports() == "", step_name
+    _assert_semver_outputs(runner)
+
+
+def test_pip_and_uvx_do_not_inherit_empty_pythonpath(runner: ActionRunner) -> None:
+    """pip and the uvx CLI start without an inherited PYTHONPATH.
+
+    Both run as scripts, so an empty PYTHONPATH entry would name the
+    working directory, the caller's workspace, and make them import
+    from it, including a sitecustomize.py at start-up.
+    """
+    runner.exported["PYTHONPATH"] = ":"
+    runner.set_report(
+        json.dumps(
+            {
+                "success": True,
+                "version": "v1.2.3",
+                "detected_type": "semver",
+                "version_prefix": True,
+            }
+        )
+    )
+
+    runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "true"
+    result = runner.run("Install local dependencies", repository="example-org/caller")
+    assert result.returncode == 0, result.stdout + result.stderr
+    runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "false"
+    result = runner.run("Validate tag", repository="example-org/caller")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert runner.stub_pythonpaths() == ["pip <unset>", "uvx <unset>"]
     _assert_semver_outputs(runner)
 
 

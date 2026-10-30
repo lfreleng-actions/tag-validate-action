@@ -260,6 +260,9 @@ runs:
         # Install dependencies without the package itself to avoid setuptools-scm issues.
         # The steps that run the local code put src/ on PYTHONPATH
         # themselves, so nothing is exported to the caller's later steps.
+        # pip runs as a script; an inherited PYTHONPATH with an empty
+        # entry would put the working directory on its sys.path.
+        unset PYTHONPATH
         pip install "dependamerge>=0.1.19" "aiolimiter>=1.2.1" "httpx[http2]>=0.28.1" "pydantic>=2.12.5" "rich>=14.2.0" "typer>=0.21.1" "python-gnupg>=0.5.3" "cryptography>=46.0.3" "packaging>=24.2" "pygerrit2>=2.0.15"
 
     - name: 'Verify Python module import'
@@ -505,6 +508,9 @@ runs:
           # Use PyPI package via uvx
           # The --quiet flag is critical to suppress uvx's download progress output,
           # which would otherwise mix with the JSON output from tag-validate and cause parsing errors
+          # The CLI runs as a script; an inherited PYTHONPATH with an
+          # empty entry would put the working directory on its sys.path.
+          unset PYTHONPATH
           CLI_CMD="uvx --quiet --from tag-validate tag-validate"
           echo "Using PyPI package via uvx"
         fi
