@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,7 @@ PLANTED_PACKAGES = ("tag_validate", "json")
 
 PLANTED_SOURCE = """\
 import os
+import re
 import sys
 
 with open(os.environ["PLANTED_MARKER"], "a", encoding="utf-8") as marker:
@@ -448,3 +450,125 @@ def test_setup_uv_ignores_workspace_python_version(
         step_env.pop("UV_SYSTEM_PYTHON", None)
         _setup_uv_lookup(step_env, workspace, action_dir)
         assert "workspace-venv" in marker.read_text(encoding="utf-8")
+
+
+# The interpreter every uv and Python start in action.yaml must name
+TRUSTED_PYTHON = "${{ steps.setup-python.outputs.python-path }}"
+TRUSTED_UV = "${{ steps.setup-uv.outputs.uv-path }}"
+
+SETUP_UV_WITH = {
+    "working-directory": "${{ github.action_path }}",
+    "tool-bin-dir": "${{ runner.temp }}/tag-validate-action/bin",
+    "enable-cache": False,
+}
+SETUP_UV_ENV = {
+    "UV_NO_CONFIG": "1",
+    "UV_NO_PROJECT": "1",
+    "UV_PYTHON_PREFERENCE": "lookup-disabled",
+    "UV_PYTHON_ARCH": "",
+    "UV_PYTHON_INSTALL_DIR": "${{ runner.temp }}/tag-validate-action/python",
+}
+
+# A uv, uvx, python, python3 or pip command word, looked up on PATH
+BARE_COMMAND = re.compile(r"(?:^|[\s;&|(])(uvx?|python3?(?:\.\d+)?|pip3?)(?=\s|$)")
+
+
+def _shell_steps() -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = _load_action()["runs"]["steps"]
+    return [step for step in steps if "run" in step]
+
+
+def _command_lines(script: str) -> list[str]:
+    """Lines of a step script that run commands, without comments or echo."""
+    lines = []
+    in_heredoc = False
+    for raw in script.splitlines():
+        line = raw.strip()
+        if in_heredoc:
+            in_heredoc = line not in ("PYEOF", "EOFOUTPUT")
+            continue
+        if "<< 'PYEOF'" in line or "<< 'EOFOUTPUT'" in line:
+            in_heredoc = True
+        if not line or line.startswith("#") or line.startswith("echo "):
+            continue
+        lines.append(line)
+    return lines
+
+
+@pytest.mark.xfail(strict=True, reason="setup-uv step not yet guarded")
+def test_setup_uv_step_contract() -> None:
+    """The setup-uv step takes the guarded form, exactly."""
+    step = _step("Install uv")
+    assert step.get("id") == "setup-uv"
+    assert step["with"] == SETUP_UV_WITH
+    assert {key: str(value) for key, value in step["env"].items()} == SETUP_UV_ENV
+
+
+@pytest.mark.xfail(strict=True, reason="steps still find Python on PATH")
+def test_steps_start_only_the_trusted_interpreter() -> None:
+    """No step finds uv or Python on PATH; each names the trusted one.
+
+    Every uv call passes --python "${PYTHON}", and every Python start
+    is "${PYTHON}" -I, where PYTHON is setup-python's python-path.
+    """
+    for step in _shell_steps():
+        name = step["name"]
+        env = step.get("env") or {}
+        for line in _command_lines(step["run"]):
+            # A module name after -m is not a command
+            command = re.sub(r"\s-m\s+\S+", " ", line)
+            assert not BARE_COMMAND.search(command), f"{name}: {line}"
+            if '"${UV}"' in line:
+                assert env.get("UV") == TRUSTED_UV, name
+                assert '--python "${PYTHON}"' in line, f"{name}: {line}"
+                assert "--no-config" in line, f"{name}: {line}"
+            for match in re.finditer(r'"\$\{PYTHON\}"', line):
+                assert env.get("PYTHON") == TRUSTED_PYTHON, name
+                before = line[: match.start()]
+                after = line[match.end() :]
+                assert before.endswith("--python ") or after.startswith(" -I "), (
+                    f"{name}: {line}"
+                )
+
+
+UV_PATH_GUARD = "Check uv PATH setting"
+
+
+@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
+def test_uv_path_guard_runs_right_before_setup_uv() -> None:
+    """The guard runs whenever setup-uv does, and just before it."""
+    steps: list[dict[str, Any]] = _load_action()["runs"]["steps"]
+    names = [step.get("name") for step in steps]
+    index = names.index("Install uv")
+    guard = steps[index - 1]
+    assert guard.get("name") == UV_PATH_GUARD
+    assert guard.get("if") == steps[index].get("if")
+
+
+@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
+@pytest.mark.parametrize("value", ["", "1"])
+def test_uv_path_guard_refuses_uv_no_modify_path(
+    runner: ActionRunner, value: str
+) -> None:
+    """UV_NO_MODIFY_PATH, even empty, stops the action before setup-uv.
+
+    setup-uv leaves PATH alone whenever the variable is defined, then
+    runs a bare uv, which PATH resolves to the caller's.
+    """
+    runner.exported["UV_NO_MODIFY_PATH"] = value
+
+    result = runner.run(UV_PATH_GUARD, repository="example-org/caller")
+
+    assert result.returncode != 0
+    assert "UV_NO_MODIFY_PATH" in result.stdout + result.stderr
+    assert runner.planted_imports() == ""
+
+
+@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
+def test_uv_path_guard_passes_without_uv_no_modify_path(
+    runner: ActionRunner,
+) -> None:
+    result = runner.run(UV_PATH_GUARD, repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.planted_imports() == ""
