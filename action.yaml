@@ -226,65 +226,97 @@ runs:
   steps:
     # yamllint disable rule:line-length
     - name: 'Set up Python'
+      id: setup-python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: '3.12'
 
+    # setup-uv leaves PATH alone whenever UV_NO_MODIFY_PATH is defined,
+    # even empty, and then runs a bare "uv", which PATH resolves to the
+    # caller's if an earlier step put one there. A step env cannot unset
+    # a variable, so stop here instead.
+    - name: 'Check uv PATH setting'
+      if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
+      shell: bash
+      run: |
+        if [ -n "${UV_NO_MODIFY_PATH+set}" ]; then
+          echo "Error: UV_NO_MODIFY_PATH is set; setup-uv would then run a uv found on PATH. Unset it before this action ❌" >&2
+          exit 1
+        fi
+
+    # The trusted interpreter is the absolute python-path output above.
+    # Every later uv and Python start names it, so no caller variable
+    # (PATH, UV_PYTHON, VIRTUAL_ENV, CONDA_PREFIX, ...) picks another.
+    #
+    # setup-uv's only uv call for these inputs is "uv python find",
+    # whose result it executes. An invalid preference makes uv refuse
+    # its arguments before any lookup; setup-uv then reports the
+    # Python version as "unknown", which nothing reads.
     - name: 'Install uv'
+      id: setup-uv
       if: inputs.use_local_action != 'true' && !contains(github.repository, 'lfreleng-actions/tag-validate-action')
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
-      env:
-        # setup-uv runs 'uv python find' to report a Python version, and
-        # starts the interpreter it finds. UV_NO_CONFIG stops uv reading
-        # a .python-version or uv.toml. UV_SYSTEM_PYTHON makes the lookup
-        # skip virtual environments, including a workspace .venv above an
-        # action checked out inside the workspace. Set on this step
-        # alone: later steps are unchanged.
-        UV_NO_CONFIG: '1'
-        UV_SYSTEM_PYTHON: '1'
       with:
+        # The action's own checkout, outside the caller's workspace
+        working-directory: "${{ github.action_path }}"
+        # Without it setup-uv puts the caller's HOME/XDG_* bin dir on PATH
+        tool-bin-dir: "${{ runner.temp }}/tag-validate-action/bin"
+        # The post-step "uv cache prune" would hit the invalid preference
         enable-cache: false
-        # The lookup above runs in, and searches, this directory and its
-        # parents. That is the action's own checkout, outside the
-        # caller's workspace, so a .venv or .python-version there is
-        # never used. setup-uv also reads uv.toml/pyproject.toml here
-        # for its settings, and exports nothing for this input. The
-        # python-version input would skip the lookup, but exports
-        # UV_PYTHON to every later step of the caller's job.
-        working-directory: ${{ github.action_path }}
+      env:
+        UV_NO_CONFIG: '1'
+        UV_NO_PROJECT: '1'
+        UV_PYTHON_PREFERENCE: 'lookup-disabled'
+        # Inherited, it makes setup-uv probe uv, which the line above fails
+        UV_PYTHON_ARCH: ''
+        UV_PYTHON_INSTALL_DIR: "${{ runner.temp }}/tag-validate-action/python"
 
     - name: 'Install local dependencies'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
       shell: bash
+      env:
+        PYTHON: ${{ steps.setup-python.outputs.python-path }}
       run: |
         # Install dependencies without the package itself to avoid setuptools-scm issues.
-        # The steps that run the local code put src/ on PYTHONPATH
+        # The steps that run the local code add src/ to sys.path
         # themselves, so nothing is exported to the caller's later steps.
-        # pip runs as a script; an inherited PYTHONPATH with an empty
-        # entry would put the working directory on its sys.path.
-        unset PYTHONPATH
-        pip install "dependamerge>=0.1.19" "aiolimiter>=1.2.1" "httpx[http2]>=0.28.1" "pydantic>=2.12.5" "rich>=14.2.0" "typer>=0.21.1" "python-gnupg>=0.5.3" "cryptography>=46.0.3" "packaging>=24.2" "pygerrit2>=2.0.15"
+        # -I ignores PYTHONPATH and the like, and keeps the working
+        # directory (the caller's workspace) off sys.path, but only for
+        # the interpreter it starts: pip runs build backends as plain
+        # subprocesses, which would inherit PYTHONHOME, PYTHONPATH and
+        # the rest, and PYTHONEXECUTABLE or __PYVENV_LAUNCHER__, which
+        # -I does not cover at all. So pip runs with an empty
+        # environment plus an allow-list holding no PYTHON* variable.
+        clean=()
+        for name in PATH HOME TMPDIR HTTP_PROXY HTTPS_PROXY ALL_PROXY \
+            NO_PROXY http_proxy https_proxy all_proxy no_proxy \
+            SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE PIP_CERT \
+            PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST; do
+          if [ -n "${!name+set}" ]; then clean+=("${name}=${!name}"); fi
+        done
+        env -i "${clean[@]}" "${PYTHON}" -I -m pip install "dependamerge>=0.1.19" "aiolimiter>=1.2.1" "httpx[http2]>=0.28.1" "pydantic>=2.12.5" "rich>=14.2.0" "typer>=0.21.1" "python-gnupg>=0.5.3" "cryptography>=46.0.3" "packaging>=24.2" "pygerrit2>=2.0.15"
 
     - name: 'Verify Python module import'
       if: inputs.use_local_action == 'true' || contains(github.repository, 'lfreleng-actions/tag-validate-action')
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        PYTHON: ${{ steps.setup-python.outputs.python-path }}
       run: |
-        # -P keeps the working directory (the caller's workspace) off
-        # sys.path; PYTHONPATH supplies src/ and nothing else, so an
-        # inherited value with an empty entry cannot add the working
-        # directory back. The installed dependencies are in site-packages,
-        # which PYTHONPATH does not affect. Python is 3.12 (set up above).
-        export PYTHONPATH="${ACTION_PATH}/src"
+        # -I keeps the working directory (the caller's workspace) off
+        # sys.path and ignores PYTHONPATH and the other PYTHON*
+        # variables. src/ is added to sys.path by the code itself.
+        # -I does not cover these two, which set sys.executable.
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+        SRC_DIR="${ACTION_PATH}/src"
         # Test if the Python module can be imported
         echo "🔍 Testing Python module import..."
-        echo "PYTHONPATH: ${PYTHONPATH}"
+        echo "Python: ${PYTHON}"
         echo "Python sys.path:"
-        python -P -c "import sys; print('\n'.join(sys.path))"
+        "${PYTHON}" -I -c 'import sys; print("\n".join(sys.path))'
         echo ""
         echo "Attempting to import tag_validate module..."
-        python -P -c "import tag_validate; print('✅ tag_validate module imported successfully'); import tag_validate; print('Module location:', tag_validate.__file__)" || {
+        "${PYTHON}" -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import tag_validate; print("✅ tag_validate module imported successfully"); print("Module location:", tag_validate.__file__)' "${SRC_DIR}" || {
           echo "❌ Failed to import tag_validate module" >&2
           echo "Directory contents of src/:" >&2
           ls -la "${ACTION_PATH}/src/" || echo "src/ directory not found" >&2
@@ -294,7 +326,7 @@ runs:
         }
         echo ""
         echo "Testing CLI entry point..."
-        python -P -m tag_validate.cli --version || {
+        "${PYTHON}" -I "${ACTION_PATH}/scripts/run_local_cli.py" --version || {
           echo "❌ Failed to run CLI --version" >&2
           exit 1
         }
@@ -319,6 +351,9 @@ runs:
       run: |
         # Run tag-validate Python CLI with rich output
         set -euo pipefail
+        # -I below does not cover these two, which set sys.executable
+        # and with it the site-packages Python uses
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
 
         # Normalize inputs to lowercase for case-insensitive matching.
         # printf '%s\n' is used instead of echo so values beginning with
@@ -495,23 +530,25 @@ runs:
           set -x
         fi
 
-        # Determine which CLI invocation method to use
+        # Determine which CLI invocation method to use. Both run the
+        # trusted interpreter set up above, named by its absolute path.
         if [[ "${USE_LOCAL_ACTION}" == "true" ]] || \
            [[ "${GITHUB_REPOSITORY}" =~ lfreleng-actions/tag-validate-action ]]; then
-          # -P keeps the working directory off sys.path, so src/ on
-          # PYTHONPATH provides tag_validate; only src/, as above.
-          # Python is 3.12 (set up above).
-          export PYTHONPATH="${ACTION_PATH}/src"
-          CLI_CMD="python -P -m tag_validate.cli"
-          echo "Using local action code: ${CLI_CMD}"
+          # -I keeps the working directory off sys.path and ignores
+          # PYTHONPATH; the launcher adds src/ to sys.path itself.
+          CLI_CMD=("${PYTHON}" -I "${ACTION_PATH}/scripts/run_local_cli.py")
+          echo "Using local action code: ${CLI_CMD[*]}"
         else
-          # Use PyPI package via uvx
+          # Use PyPI package via uvx (uv tool run), on the trusted interpreter.
           # The --quiet flag is critical to suppress uvx's download progress output,
           # which would otherwise mix with the JSON output from tag-validate and cause parsing errors
-          # The CLI runs as a script; an inherited PYTHONPATH with an
-          # empty entry would put the working directory on its sys.path.
-          unset PYTHONPATH
-          CLI_CMD="uvx --quiet --from tag-validate tag-validate"
+          # The CLI runs as a console script, which honours PYTHON*
+          # variables (PYTHONPATH, PYTHONHOME, ...); drop them all.
+          # PYTHON, the trusted interpreter's path, is the action's own.
+          while IFS= read -r name; do
+            unset "${name}"
+          done < <(compgen -e | grep -E '^(PYTHON.+|__PYVENV_LAUNCHER__)$' || true)
+          CLI_CMD=("${UV}" tool run --no-config --python "${PYTHON}" --quiet --from tag-validate tag-validate)
           echo "Using PyPI package via uvx"
         fi
 
@@ -537,8 +574,8 @@ runs:
             COMMON_ARGS+=("--json-file" "${JSON_FILE}")
           fi
 
-          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} validate \"${TAG_LOCATION}\" ${COMMON_ARGS[@]}"
-          ${CLI_CMD} ${VERBOSE_FLAG} validate "${TAG_LOCATION}" "${COMMON_ARGS[@]}" || EXIT_CODE=$?
+          echo "🔍 Executing: ${CLI_CMD[*]} ${VERBOSE_FLAG} validate \"${TAG_LOCATION}\" ${COMMON_ARGS[@]}"
+          "${CLI_CMD[@]}" ${VERBOSE_FLAG} validate "${TAG_LOCATION}" "${COMMON_ARGS[@]}" || EXIT_CODE=$?
           echo ""  # Add blank line after rich output
 
           # Read JSON from file if it was created
@@ -564,8 +601,8 @@ runs:
             ALL_VERIFY_ARGS+=("--json-file" "${JSON_FILE}")
           fi
 
-          echo "🔍 Executing: ${CLI_CMD} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]}"
-          ${CLI_CMD} ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" || EXIT_CODE=$?
+          echo "🔍 Executing: ${CLI_CMD[*]} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]}"
+          "${CLI_CMD[@]}" ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" || EXIT_CODE=$?
           echo ""  # Add blank line after rich output
 
           # Read JSON from file if it was created
@@ -579,7 +616,7 @@ runs:
         if [ "${UPLOAD_JSON}" = "true" ] && [ -n "${JSON_OUTPUT:-}" ]; then
           # Validate JSON using Python. The report is passed on stdin, never
           # as program text: it holds the tag, which may contain quotes.
-          printf '%s' "${JSON_OUTPUT}" | python3 -I -c 'import json, sys; json.load(sys.stdin)' 2>/dev/null || {
+          printf '%s' "${JSON_OUTPUT}" | "${PYTHON}" -I -c 'import json, sys; json.load(sys.stdin)' 2>/dev/null || {
             echo "Warning: Invalid JSON for artifact upload" >&2
             echo "Continuing without artifact upload..." >&2
             UPLOAD_JSON="false"
@@ -588,7 +625,7 @@ runs:
 
         # Generate artifact suffix (timestamp + random hex for uniqueness)
         if [ "${UPLOAD_JSON}" = "true" ]; then
-          ARTIFACT_SUFFIX=$(python3 -I -c "
+          ARTIFACT_SUFFIX=$("${PYTHON}" -I -c "
         import secrets
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
@@ -607,15 +644,15 @@ runs:
               echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
               ;;
             pretty)
-              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | "${PYTHON}" -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
             both)
               echo "${JSON_OUTPUT}" > "${ARTIFACT_DIR}/tag-validation.json"
-              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | "${PYTHON}" -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
             *)
               echo "Warning: Invalid json_upload_format '${JSON_UPLOAD_FORMAT}', defaulting to 'pretty'" >&2
-              echo "${JSON_OUTPUT}" | python3 -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
+              echo "${JSON_OUTPUT}" | "${PYTHON}" -I -m json.tool > "${ARTIFACT_DIR}/tag-validation-pretty.json"
               ;;
           esac
 
@@ -716,11 +753,13 @@ runs:
         PYEOF
 
         # Execute the Python script with JSON output and exit code as arguments
-        python -I /tmp/parse_output.py "${JSON_OUTPUT:-}" "${EXIT_CODE}" "${ARTIFACT_DIR:-}" "${ARTIFACT_SUFFIX:-}"
+        "${PYTHON}" -I /tmp/parse_output.py "${JSON_OUTPUT:-}" "${EXIT_CODE}" "${ARTIFACT_DIR:-}" "${ARTIFACT_SUFFIX:-}"
 
         # Exit code is already set by Python script above
       env:
         ACTION_PATH: ${{ github.action_path }}
+        PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        UV: ${{ steps.setup-uv.outputs.uv-path }}
         GITHUB_TOKEN: ${{ inputs.token }}
         GITHUB_SERVER_URL: ${{ inputs.github_server_url || env.GITHUB_SERVER_URL || 'https://github.com' }}
         GERRIT_USERNAME: ${{ inputs.gerrit_username || env.GERRIT_USERNAME }}
