@@ -1129,6 +1129,169 @@ jobs:
           QUOTES_TAG: ${{ steps.planted-quotes.outputs.tag_name }}
           QUOTES_ARTIFACT: ${{ steps.planted-quotes.outputs.artifact_path }}
 
+  ### Test Caller Settings Cannot Pick The Interpreter ###
+  test-interpreter-isolation:
+    name: "Test Interpreter Isolation"
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        selector: [request, active-environment]
+    steps:
+      # A caller's earlier step can write bait to the workspace, put
+      # it on PATH through GITHUB_PATH and export settings through
+      # GITHUB_ENV. Each bait interpreter and module appends to
+      # bait-ran; the action must start none of them.
+      - name: "Plant bait interpreters, modules and settings"
+        shell: bash
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          set -euo pipefail
+          marker="${RUNNER_TEMP}/bait-ran"
+          venv="${GITHUB_WORKSPACE}/.venv"
+          xdg_bin="${GITHUB_WORKSPACE}/xdg-bin"
+          mkdir -p "${venv}/bin" "${venv}/conda-meta" "${xdg_bin}" \
+            pkg/urllib urllib "${GITHUB_WORKSPACE}/pyhome" \
+            "${GITHUB_WORKSPACE}/userbase"
+          bait_command() {
+            printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 1\n' \
+              "$1" "${marker}" > "$2/$1"
+            chmod +x "$2/$1"
+          }
+          for name in python python3 python3.13 uv; do
+            bait_command "${name}" "${venv}/bin"
+          done
+          for name in env bash; do
+            bait_command "${name}" "${xdg_bin}"
+          done
+          printf 'home = %s\nversion = 3.13.0\n' "${venv}/bin" \
+            > "${venv}/pyvenv.cfg"
+          bait_module() {
+            printf 'with open("%s", "a") as handle:\n' "${marker}" > "$1"
+            printf '    handle.write("%s imported\\n")\n' "$1" >> "$1"
+          }
+          for dir in pkg .; do
+            for module in json.py base64.py sitecustomize.py \
+              usercustomize.py urllib/__init__.py; do
+              (cd "${dir}" && bait_module "${module}")
+            done
+          done
+          bait_module startup.py
+          # Used if PYTHONEXECUTABLE or __PYVENV_LAUNCHER__ make the
+          # interpreter take .venv for its prefix
+          for version in 3.12 3.13; do
+            site="${venv}/lib/python${version}/site-packages"
+            mkdir -p "${site}"
+            (cd "${site}" && bait_module sitecustomize.py)
+          done
+          # The runner puts GITHUB_PATH entries ahead of PATH, so a
+          # PATH= line in GITHUB_ENV would not put the bait first
+          echo "${venv}/bin" >> "${GITHUB_PATH}"
+          {
+            echo "PYTHONPATH=pkg:."
+            echo "PYTHONHOME=${GITHUB_WORKSPACE}/pyhome"
+            echo "PYTHONUSERBASE=${GITHUB_WORKSPACE}/userbase"
+            echo "PYTHONSTARTUP=${GITHUB_WORKSPACE}/startup.py"
+            echo "PYTHONEXECUTABLE=${venv}/bin/python"
+            echo "__PYVENV_LAUNCHER__=${venv}/bin/python"
+            echo "UV_NO_CACHE=1"
+            echo "UV_PYTHON_ARCH=$(uname -m)"
+            echo "UV_PYTHON_INSTALL_MIRROR=https://127.0.0.1:9"
+            echo "XDG_BIN_HOME=${xdg_bin}"
+            if [ "${SELECTOR}" = "request" ]; then
+              echo "UV_PYTHON=${venv}/bin/python"
+              echo "UV_PYTHON_SEARCH_PATH=${venv}/bin"
+              echo "UV_PYTHON_INSTALL_DIR=${GITHUB_WORKSPACE}/uv-python"
+              echo "UV_PYTHON_PREFERENCE=only-system"
+            else
+              # UV_PYTHON stays unset: it would mask the active
+              # environment
+              echo "VIRTUAL_ENV=${venv}"
+              echo "CONDA_PREFIX=${venv}"
+              echo "CONDA_DEFAULT_ENV=base"
+              echo "UV_INTERNAL__PARENT_INTERPRETER=${venv}/bin/python"
+              echo "UV_INTERNAL__TEST_PYTHON_MANAGED=1"
+              echo "UV_CACHE_DIR=${GITHUB_WORKSPACE}/uv-cache"
+            fi
+          } >> "${GITHUB_ENV}"
+
+      # Control: a Python that is not isolated runs the bait, so a
+      # clean result below means the action avoided it
+      - name: "Check the bait is live"
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="${RUNNER_TEMP}/bait-ran"
+          python3 -c pass || true
+          grep -q '^python3 ' "${marker}" || {
+            echo "Error: python3 on PATH did not run the bait"
+            exit 1
+          }
+          rm -f "${marker}"
+          # Named by absolute path: on macOS, bash returns the python3
+          # it hashed above, the bait, whatever PATH says. This job runs
+          # no setup-python, and both runner images ship this one.
+          real_python=/usr/bin/python3
+          env -u PYTHONHOME -u PYTHONEXECUTABLE -u __PYVENV_LAUNCHER__ \
+            "${real_python}" -c 'import json' || true
+          grep -q ' imported$' "${marker}" || {
+            echo "Error: ${real_python} did not import the bait modules"
+            exit 1
+          }
+          rm -f "${marker}"
+          echo "✓ The bait is live"
+
+      - name: "Validate tag string (cold)"
+        uses: $/
+        id: cold
+        with:
+          tag_string: "v1.2.3"
+          require_type: semver
+
+      - name: "Validate tag string (warm)"
+        uses: $/
+        id: warm
+        with:
+          tag_string: "v1.2.3"
+          require_type: semver
+
+      - name: "Verify no bait ran and the outputs"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e "${RUNNER_TEMP}/bait-ran" ]; then
+            echo "Error: the action ran bait from the caller's settings:"
+            cat "${RUNNER_TEMP}/bait-ran"
+            exit 1
+          fi
+          case ":${PATH}:" in
+            *":${GITHUB_WORKSPACE}/xdg-bin:"*)
+              echo "Error: the action put XDG_BIN_HOME on PATH"
+              exit 1
+              ;;
+          esac
+          for run in "cold ${COLD_VALID} ${COLD_TYPE} ${COLD_TAG}" \
+            "warm ${WARM_VALID} ${WARM_TYPE} ${WARM_TAG}"; do
+            if [ "${run#* }" != "true semver v1.2.3" ]; then
+              echo "Error: unexpected outputs for the ${run%% *} run:" \
+                "${run#* }"
+              exit 1
+            fi
+          done
+          echo "✓ No caller setting picked the interpreter"
+        env:
+          COLD_VALID: ${{ steps.cold.outputs.valid }}
+          COLD_TYPE: ${{ steps.cold.outputs.tag_type }}
+          COLD_TAG: ${{ steps.cold.outputs.tag_name }}
+          WARM_VALID: ${{ steps.warm.outputs.valid }}
+          WARM_TYPE: ${{ steps.warm.outputs.tag_type }}
+          WARM_TAG: ${{ steps.warm.outputs.tag_name }}
+
   ### Summary ###
   ### Python Package Tests ###
   test-python-validation:
@@ -1524,6 +1687,7 @@ jobs:
       - test-input-priority
       - test-edge-cases
       - test-workspace-isolation
+      - test-interpreter-isolation
       - test-python-validation
       - test-python-signature-detection
       - test-python-tag-operations
@@ -1546,6 +1710,7 @@ jobs:
             echo "✅ Input priority tests"
             echo "✅ Edge case tests"
             echo "✅ Workspace isolation tests"
+            echo "✅ Interpreter isolation tests"
             echo ""
             echo "### Python Package Tests"
             echo "✅ Python version validation tests"
