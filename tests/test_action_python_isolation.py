@@ -11,7 +11,10 @@ can assert that the action only ever loads its own code.
 
 Steps run as the runner runs composite bash steps
 (bash --noprofile --norc -eo pipefail), and values a step appends to
-GITHUB_ENV are passed on to the later steps.
+GITHUB_ENV are passed on to the later steps. PYTHON and UV stand in
+for the setup-python and setup-uv outputs; python, python3, pip, uv
+and uvx on PATH are planted too, so a step that looks one up there
+records it.
 """
 
 from __future__ import annotations
@@ -47,13 +50,22 @@ with open(os.environ["PLANTED_MARKER"], "a", encoding="utf-8") as marker:
 sys.exit(97)
 """
 
-# The stubs log the PYTHONPATH they were started with: pip and the
-# uvx console script are Python programs run as scripts, so an empty
-# entry there would put the workspace on their sys.path.
-STUB_UVX = """\
+PLANTED_COMMAND = """\
+#!/bin/sh
+echo "$(basename "$0") on PATH" >> "${PLANTED_MARKER}"
+exit 97
+"""
+PLANTED_COMMANDS = ("python", "python3", "pip", "uv", "uvx")
+
+# The uv stub logs the PYTHONPATH it was started with: the uvx console
+# script is a Python program run without -I, so a PYTHONPATH entry
+# naming the workspace would make it import from there.
+STUB_UV = """\
 #!/usr/bin/env bash
-# Stand-in for the PyPI CLI: copy STUB_REPORT to the --json-file path.
-printf 'uvx %s\\n' "${PYTHONPATH-<unset>}" >> "${STUB_ENV_LOG}"
+# Stand-in for 'uv tool run ... tag-validate': copy STUB_REPORT to the
+# --json-file path.
+printf 'uv %s\\n' "${PYTHONPATH-<unset>}" >> "${STUB_ENV_LOG}"
+printf '%s\\n' "$*" >> "${STUB_ARGS_LOG}"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--json-file" ]; then
     cp "${STUB_REPORT}" "$2"
@@ -62,11 +74,20 @@ while [ "$#" -gt 0 ]; do
 done
 """
 
-STUB_PIP = """\
+# The trusted interpreter: the test interpreter, which already has the
+# action's dependencies, so pip itself is not run. A wrapper rather
+# than a symlink keeps a virtual environment's site-packages. The pip
+# call logs the Python start-up variables it inherited, which pip's
+# build subprocesses would see; the log path is written in, since pip
+# runs with an empty environment.
+STUB_PYTHON = """\
 #!/usr/bin/env bash
-# The test interpreter already has the action's dependencies.
-printf 'pip %s\\n' "${PYTHONPATH-<unset>}" >> "${STUB_ENV_LOG}"
-exit 0
+if [ "$1 $2 $3 $4" = "-I -m pip install" ]; then
+  inherited=$(compgen -e | grep -E '^(PYTHON|__PYVENV_LAUNCHER__)' | sort)
+  printf 'python %s [%s]\\n' "$*" "$(echo ${{inherited}})" >> "{env_log}"
+  exit 0
+fi
+exec "{python}" "$@"
 """
 
 
@@ -92,6 +113,12 @@ def _input_defaults() -> dict[str, str]:
     }
 
 
+def _pip_requirements() -> list[str]:
+    run = _step("Install local dependencies")["run"]
+    line = next(line for line in run.splitlines() if "-m pip install" in line)
+    return [arg.strip('"') for arg in line.split("pip install ", 1)[1].split()]
+
+
 def _write_executable(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
     path.chmod(0o755)
@@ -113,7 +140,13 @@ class ActionRunner:
         self.workspace = tmp_path / "workspace"
         self.runner_temp = tmp_path / "runner-temp"
         self.bin_dir = tmp_path / "bin"
-        for directory in (self.workspace, self.runner_temp, self.bin_dir):
+        self.tool_dir = tmp_path / "tools"
+        for directory in (
+            self.workspace,
+            self.runner_temp,
+            self.bin_dir,
+            self.tool_dir,
+        ):
             directory.mkdir()
         self.marker = tmp_path / "planted-ran"
         self.github_env = tmp_path / "github-env"
@@ -123,16 +156,17 @@ class ActionRunner:
             path.touch()
         self.report = tmp_path / "report.json"
         self.stub_env_log = tmp_path / "stub-env"
+        self.stub_args_log = tmp_path / "stub-args"
 
-        # python/python3 resolve to the test interpreter, which has the
-        # action's dependencies installed. A wrapper rather than a
-        # symlink keeps a virtual environment's site-packages.
-        for name in ("python", "python3"):
-            _write_executable(
-                self.bin_dir / name, f'#!/bin/sh\nexec "{sys.executable}" "$@"\n'
-            )
-        _write_executable(self.bin_dir / "uvx", STUB_UVX)
-        _write_executable(self.bin_dir / "pip", STUB_PIP)
+        for name in PLANTED_COMMANDS:
+            _write_executable(self.bin_dir / name, PLANTED_COMMAND)
+        self.python = self.tool_dir / "python"
+        self.uv = self.tool_dir / "uv"
+        _write_executable(
+            self.python,
+            STUB_PYTHON.format(env_log=self.stub_env_log, python=sys.executable),
+        )
+        _write_executable(self.uv, STUB_UV)
 
         self.inputs = _input_defaults()
         self.exported: dict[str, str] = {}
@@ -167,9 +201,17 @@ class ActionRunner:
             "PLANTED_MARKER": str(self.marker),
             "STUB_REPORT": str(self.report),
             "STUB_ENV_LOG": str(self.stub_env_log),
+            "STUB_ARGS_LOG": str(self.stub_args_log),
         }
         env.update(self.exported)
         env.update(self.inputs)
+        # The step's own env block, as the runner sets it, over the
+        # values exported by earlier steps
+        step_env = step.get("env") or {}
+        if "PYTHON" in step_env:
+            env["PYTHON"] = str(self.python)
+        if "UV" in step_env:
+            env["UV"] = str(self.uv)
 
         script = self.runner_temp / "step.sh"
         script.write_text(step["run"], encoding="utf-8")
@@ -186,6 +228,12 @@ class ActionRunner:
         self.exported.update(_read_key_values(self.github_env))
         return result
 
+    def uv_calls(self) -> list[str]:
+        """The arguments of each uv stub call."""
+        if not self.stub_args_log.exists():
+            return []
+        return self.stub_args_log.read_text(encoding="utf-8").splitlines()
+
     def planted_imports(self) -> str:
         if self.marker.exists():
             return self.marker.read_text(encoding="utf-8")
@@ -195,7 +243,11 @@ class ActionRunner:
         return _read_key_values(self.github_output)
 
     def stub_pythonpaths(self) -> list[str]:
-        """The PYTHONPATH each pip or uvx stub call was started with."""
+        """The logged pip and uv calls.
+
+        The pip line lists the PYTHON* names pip inherited; each uv line,
+        the PYTHONPATH that call started with.
+        """
         if not self.stub_env_log.exists():
             return []
         return self.stub_env_log.read_text(encoding="utf-8").splitlines()
@@ -243,12 +295,13 @@ def test_validate_step_ignores_workspace_modules_with_pypi_cli(
     assert result.returncode == 0, result.stdout + result.stderr
     assert runner.planted_imports() == ""
     _assert_semver_outputs(runner)
+    [call] = runner.uv_calls()
+    assert call.startswith(
+        f"tool run --no-config --python {runner.python} --quiet "
+        "--from tag-validate tag-validate validate v1.2.3 "
+    )
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="the action runs its local code on Python 3.12 with -P (3.11+)",
-)
 def test_local_code_steps_ignore_workspace_modules(runner: ActionRunner) -> None:
     """use_local_action imports tag_validate from src/, not the workspace."""
     runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "true"
@@ -267,18 +320,13 @@ def test_local_code_steps_ignore_workspace_modules(runner: ActionRunner) -> None
     _assert_semver_outputs(runner)
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="the action runs its local code on Python 3.12 with -P (3.11+)",
-)
 def test_local_code_steps_ignore_inherited_empty_pythonpath(
     runner: ActionRunner,
 ) -> None:
-    """An inherited PYTHONPATH with an empty entry does not reach sys.path.
+    """An inherited PYTHONPATH naming the workspace does not reach sys.path.
 
-    -P does not drop an empty PYTHONPATH entry, which names the working
-    directory and makes Python run a sitecustomize.py found there, so
-    the local steps must not carry the inherited value over.
+    An empty PYTHONPATH entry names the working directory and makes
+    Python run a sitecustomize.py found there; -I ignores PYTHONPATH.
     """
     runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "true"
     runner.exported["PYTHONPATH"] = ":"
@@ -290,12 +338,42 @@ def test_local_code_steps_ignore_inherited_empty_pythonpath(
     _assert_semver_outputs(runner)
 
 
+def test_local_code_steps_ignore_inherited_executable(runner: ActionRunner) -> None:
+    """PYTHONEXECUTABLE and __PYVENV_LAUNCHER__ do not move sys.prefix.
+
+    -I does not cover either: each sets sys.executable, and a
+    pyvenv.cfg beside the named file makes Python load that
+    directory's site-packages, here a sitecustomize.py.
+    """
+    venv = runner.workspace / ".venv"
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site_packages = venv / "lib" / version / "site-packages"
+    site_packages.mkdir(parents=True)
+    (site_packages / "sitecustomize.py").write_text(PLANTED_SOURCE, encoding="utf-8")
+    (venv / "pyvenv.cfg").write_text(
+        f"home = {Path(sys.base_prefix) / 'bin'}\n", encoding="utf-8"
+    )
+    runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "true"
+
+    for variable in ("PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+        runner.exported = {variable: str(venv / "bin" / "python")}
+        for step_name in ("Verify Python module import", "Validate tag"):
+            result = runner.run(step_name, repository="example-org/caller")
+            assert result.returncode == 0, (
+                f"{variable} {step_name}: {result.stdout}{result.stderr}"
+            )
+            assert runner.planted_imports() == "", (variable, step_name)
+    _assert_semver_outputs(runner)
+
+
 def test_pip_and_uvx_do_not_inherit_empty_pythonpath(runner: ActionRunner) -> None:
     """pip and the uvx CLI start without an inherited PYTHONPATH.
 
-    Both run as scripts, so an empty PYTHONPATH entry would name the
-    working directory, the caller's workspace, and make them import
-    from it, including a sitecustomize.py at start-up.
+    pip runs under -I, which ignores PYTHONPATH. The uvx CLI is a
+    console script, so the step drops PYTHONPATH before it starts it;
+    an empty entry would name the working directory, the caller's
+    workspace, and make it import from there, including a
+    sitecustomize.py at start-up.
     """
     runner.exported["PYTHONPATH"] = ":"
     runner.set_report(
@@ -316,8 +394,39 @@ def test_pip_and_uvx_do_not_inherit_empty_pythonpath(runner: ActionRunner) -> No
     result = runner.run("Validate tag", repository="example-org/caller")
     assert result.returncode == 0, result.stdout + result.stderr
 
-    assert runner.stub_pythonpaths() == ["pip <unset>", "uvx <unset>"]
+    assert runner.stub_pythonpaths() == [
+        "python -I -m pip install " + " ".join(_pip_requirements()) + " []",
+        "uv <unset>",
+    ]
+    assert runner.planted_imports() == ""
     _assert_semver_outputs(runner)
+
+
+def test_pip_starts_with_no_python_settings(runner: ActionRunner) -> None:
+    """pip, and so its build subprocesses, inherit no PYTHON* settings.
+
+    -I covers only the interpreter it starts: pip runs build backends
+    as plain subprocesses, where an inherited PYTHONHOME breaks the
+    build and PYTHONPATH or PYTHONSTARTUP load the caller's code.
+    """
+    runner.inputs["INPUTS_USE_LOCAL_ACTION"] = "true"
+    runner.exported.update(
+        {
+            "PYTHONPATH": ":",
+            "PYTHONHOME": str(runner.workspace),
+            "PYTHONSTARTUP": str(runner.workspace / "sitecustomize.py"),
+            "PYTHONEXECUTABLE": str(runner.workspace / "python"),
+            "__PYVENV_LAUNCHER__": str(runner.workspace / "python"),
+        }
+    )
+
+    result = runner.run("Install local dependencies", repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.stub_pythonpaths() == [
+        "python -I -m pip install " + " ".join(_pip_requirements()) + " []"
+    ]
+    assert runner.planted_imports() == ""
 
 
 # Closes a ''' string and appends to the marker file if run as Python;
@@ -360,27 +469,43 @@ def test_invalid_json_disables_upload(runner: ActionRunner) -> None:
 
 
 def _setup_uv_lookup(
-    step_env: dict[str, str], workspace: Path, action_dir: Path
+    caller_env: dict[str, str],
+    step_env: dict[str, str],
+    workspace: Path,
+    action_dir: Path,
 ) -> subprocess.CompletedProcess:
-    """Run setup-uv's 'uv python find' as the Install uv step would."""
+    """Run setup-uv's 'uv python find' as the Install uv step would.
+
+    caller_env stands for what the caller's earlier steps exported;
+    the step's own env block is set over it, as the runner does.
+    """
+    expressions = {
+        "${{ github.workspace }}": str(workspace),
+        "${{ github.action_path }}": str(action_dir),
+        "${{ runner.temp }}": str(workspace.parent / "runner-temp"),
+    }
+
+    def expand(value: object) -> str:
+        text = str(value)
+        for expression, replacement in expressions.items():
+            text = text.replace(expression, replacement)
+        return text
+
     # setup-uv's default working-directory is the workspace
-    working_directory = (
-        str(
-            (_step("Install uv").get("with") or {}).get(
-                "working-directory", "${{ github.workspace }}"
-            )
+    working_directory = expand(
+        (_step("Install uv").get("with") or {}).get(
+            "working-directory", "${{ github.workspace }}"
         )
-        .replace("${{ github.workspace }}", str(workspace))
-        .replace("${{ github.action_path }}", str(action_dir))
     )
     # A runner job has no virtual environment active; the one running
-    # these tests would otherwise be found before any .venv.
+    # these tests would otherwise be found.
     env = {
         key: value
         for key, value in os.environ.items()
         if key not in {"VIRTUAL_ENV", "CONDA_PREFIX"} and not key.startswith("UV_")
     }
-    env.update(step_env)
+    env.update(caller_env)
+    env.update({key: expand(value) for key, value in step_env.items()})
     return subprocess.run(
         ["uv", "python", "find", "--directory", working_directory],
         cwd=workspace,
@@ -392,64 +517,84 @@ def _setup_uv_lookup(
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
+@pytest.mark.parametrize("selector", ["request", "active-environment"])
 @pytest.mark.parametrize(
     "action_inside_workspace",
     [False, True],
     ids=["action-outside-workspace", "action-inside-workspace"],
 )
-def test_setup_uv_ignores_workspace_python_version(
-    tmp_path: Path, action_inside_workspace: bool
+def test_setup_uv_lookup_runs_no_caller_interpreter(
+    tmp_path: Path, selector: str, action_inside_workspace: bool
 ) -> None:
-    """setup-uv's interpreter lookup uses nothing from the workspace.
+    """setup-uv's interpreter lookup starts nothing a caller chose.
 
     setup-uv runs 'uv python find --directory <working-directory>' and
     starts the interpreter it reports, so this runs that call under
-    the env and working-directory the action gives the step. The
-    workspace holds a .python-version naming a script, and a .venv
-    whose interpreters are scripts; each records that it ran. The
-    action directory is outside the workspace, as for a published
-    action, or below it, as for a caller using the action from its own
-    checkout. There the .venv is in a parent of the action directory,
-    and only UV_SYSTEM_PYTHON keeps the lookup from running it, which
-    the test also checks by running the lookup without it.
+    the env and working-directory the action gives the step, with
+    caller variables naming interpreters in the workspace: requested
+    ones (UV_PYTHON, ...) or an active environment (VIRTUAL_ENV, ...).
+    Each planted interpreter records that it ran. The step's invalid
+    UV_PYTHON_PREFERENCE makes uv refuse its arguments before any
+    lookup; the control shows that, without it, uv runs one.
     """
     workspace = tmp_path / "workspace"
     if action_inside_workspace:
         action_dir = workspace / "actions" / "tag-validate-action"
     else:
         action_dir = tmp_path / "_actions" / "tag-validate-action"
-    venv_bin = workspace / ".venv" / "bin"
-    for directory in (workspace, action_dir, venv_bin):
+    venv = workspace / ".venv"
+    venv_bin = venv / "bin"
+    for directory in (workspace, action_dir, venv_bin, venv / "conda-meta"):
         directory.mkdir(parents=True)
     for name in ("action.yaml", "pyproject.toml"):
         shutil.copy(REPO_ROOT / name, action_dir / name)
     marker = tmp_path / "planted-ran"
-    pinned = workspace / "planted-python"
-    _write_executable(pinned, f'#!/bin/sh\necho uv-pin >> "{marker}"\nexit 1\n')
-    (workspace / ".python-version").write_text(f"{pinned}\n", encoding="utf-8")
-    (workspace / ".venv" / "pyvenv.cfg").write_text(
+    (venv / "pyvenv.cfg").write_text(
         "home = /usr/bin\nversion = 3.12.0\n", encoding="utf-8"
     )
-    for name in ("python", "python3"):
+    for name in ("python", "python3", "python3.12", "python3.13"):
         _write_executable(
-            venv_bin / name, f'#!/bin/sh\necho workspace-venv >> "{marker}"\nexit 1\n'
+            venv_bin / name, f'#!/bin/sh\necho {name} >> "{marker}"\nexit 1\n'
+        )
+    (workspace / ".python-version").write_text(
+        f"{venv_bin / 'python'}\n", encoding="utf-8"
+    )
+
+    caller_env = {"PATH": f"{venv_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+    if selector == "request":
+        caller_env.update(
+            {
+                "UV_PYTHON": str(venv_bin / "python"),
+                "UV_PYTHON_SEARCH_PATH": str(venv_bin),
+                "UV_PYTHON_INSTALL_DIR": str(workspace / "uv-python"),
+                "UV_PYTHON_PREFERENCE": "only-system",
+            }
+        )
+    else:
+        caller_env.update(
+            {
+                "VIRTUAL_ENV": str(venv),
+                "CONDA_PREFIX": str(venv),
+                "CONDA_DEFAULT_ENV": "base",
+                "UV_INTERNAL__PARENT_INTERPRETER": str(venv_bin / "python"),
+            }
         )
 
     step_env = {
         key: str(value) for key, value in (_step("Install uv").get("env") or {}).items()
     }
-    result = _setup_uv_lookup(step_env, workspace, action_dir)
+    result = _setup_uv_lookup(caller_env, step_env, workspace, action_dir)
 
     planted = marker.read_text(encoding="utf-8") if marker.exists() else ""
     assert planted == "", result.stdout + result.stderr
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "lookup-disabled" in result.stderr
 
-    if action_inside_workspace:
-        # Control: without UV_SYSTEM_PYTHON the lookup runs the .venv
-        # interpreter in the action directory's parent.
-        step_env.pop("UV_SYSTEM_PYTHON", None)
-        _setup_uv_lookup(step_env, workspace, action_dir)
-        assert "workspace-venv" in marker.read_text(encoding="utf-8")
+    # Control: without the invalid preference the lookup runs one of
+    # the planted interpreters.
+    step_env.pop("UV_PYTHON_PREFERENCE")
+    control = _setup_uv_lookup(caller_env, step_env, workspace, action_dir)
+    assert marker.exists(), control.stdout + control.stderr
 
 
 # The interpreter every uv and Python start in action.yaml must name
@@ -495,7 +640,6 @@ def _command_lines(script: str) -> list[str]:
     return lines
 
 
-@pytest.mark.xfail(strict=True, reason="setup-uv step not yet guarded")
 def test_setup_uv_step_contract() -> None:
     """The setup-uv step takes the guarded form, exactly."""
     step = _step("Install uv")
@@ -504,7 +648,6 @@ def test_setup_uv_step_contract() -> None:
     assert {key: str(value) for key, value in step["env"].items()} == SETUP_UV_ENV
 
 
-@pytest.mark.xfail(strict=True, reason="steps still find Python on PATH")
 def test_steps_start_only_the_trusted_interpreter() -> None:
     """No step finds uv or Python on PATH; each names the trusted one.
 
@@ -534,7 +677,6 @@ def test_steps_start_only_the_trusted_interpreter() -> None:
 UV_PATH_GUARD = "Check uv PATH setting"
 
 
-@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
 def test_uv_path_guard_runs_right_before_setup_uv() -> None:
     """The guard runs whenever setup-uv does, and just before it."""
     steps: list[dict[str, Any]] = _load_action()["runs"]["steps"]
@@ -545,7 +687,6 @@ def test_uv_path_guard_runs_right_before_setup_uv() -> None:
     assert guard.get("if") == steps[index].get("if")
 
 
-@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
 @pytest.mark.parametrize("value", ["", "1"])
 def test_uv_path_guard_refuses_uv_no_modify_path(
     runner: ActionRunner, value: str
@@ -564,7 +705,6 @@ def test_uv_path_guard_refuses_uv_no_modify_path(
     assert runner.planted_imports() == ""
 
 
-@pytest.mark.xfail(strict=True, reason="no guard ahead of setup-uv yet")
 def test_uv_path_guard_passes_without_uv_no_modify_path(
     runner: ActionRunner,
 ) -> None:
