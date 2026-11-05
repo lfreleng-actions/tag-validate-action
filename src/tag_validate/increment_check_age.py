@@ -8,7 +8,7 @@ release rather than a replay of an old one.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import TagAgeCheckInfo, TagInfo
 
@@ -108,9 +108,9 @@ def check_tag_age(
         )
         return info
     if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
+        created = created.replace(tzinfo=UTC)
 
-    reference = now or datetime.now(timezone.utc)
+    reference = now or datetime.now(UTC)
     age_seconds = (reference - created).total_seconds()
     info.tag_date = tag_info.tag_date
 
