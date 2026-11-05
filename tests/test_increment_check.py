@@ -5,7 +5,7 @@
 
 import logging
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -847,7 +847,7 @@ def _tag_info(
 class TestCheckTagAge:
     """Tests for the tag age (freshness) check."""
 
-    NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=timezone.utc)
+    NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=UTC)
 
     def _at(self, **delta) -> str:
         """Return an ISO timestamp offset from the reference time."""

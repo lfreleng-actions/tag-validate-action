@@ -143,10 +143,9 @@ class TagMetadataMixin:
         if match:
             timestamp = int(match.group("timestamp"))
             # Convert to ISO 8601 format
-            from datetime import datetime
-            from datetime import timezone as dt_timezone
+            from datetime import UTC, datetime
 
-            dt = datetime.fromtimestamp(timestamp, tz=dt_timezone.utc)
+            dt = datetime.fromtimestamp(timestamp, tz=UTC)
             iso_date = dt.isoformat()
             logger.debug(f"Extracted tag date: {iso_date}")
             return iso_date

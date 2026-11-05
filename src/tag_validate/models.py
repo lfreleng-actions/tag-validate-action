@@ -17,7 +17,7 @@ they are re-exported here so ``tag_validate.models`` remains the single
 import point for all model types.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -209,7 +209,7 @@ class ValidationResult(BaseModel):
 
     # Metadata
     validated_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="When validation was performed",
     )
 
