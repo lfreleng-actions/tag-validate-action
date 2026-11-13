@@ -179,11 +179,10 @@ class WorkflowSignatureMixin(WorkflowContext):
                 )
 
         # Check if unsigned is explicitly required
-        elif self.config.require_unsigned:
-            if signature_info.type != "unsigned":
-                result.add_error("Tag must be unsigned but has a signature")
-                logger.warning("Signed tag when unsigned is required")
-                return False
+        elif self.config.require_unsigned and signature_info.type != "unsigned":
+            result.add_error("Tag must be unsigned but has a signature")
+            logger.warning("Signed tag when unsigned is required")
+            return False
 
         # Ambivalent - accept any signature state
         # Signature info is already shown in dedicated section
