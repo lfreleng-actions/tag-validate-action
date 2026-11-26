@@ -468,6 +468,141 @@ def test_invalid_json_disables_upload(runner: ActionRunner) -> None:
     assert runner.planted_imports() == ""
 
 
+PUSH_EVENT = {
+    "GITHUB_EVENT_NAME": "push",
+    "GITHUB_REF": "refs/tags/v1.2.3",
+    "GITHUB_REF_NAME": "v1.2.3",
+    "EVENT_PUSHED_AT": "1795730433",
+}
+PUSH_REFERENCE = "--reference-time 1795730433 --reference-source push_event"
+OTHER_OBJECT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _git(workspace: Path, *args: str) -> str:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "tag.gpgSign=false",
+            "-c",
+            "commit.gpgSign=false",
+            *args,
+        ],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _tag_workspace(workspace: Path, tag: str) -> dict[str, str]:
+    """Make the workspace a repository holding an annotated tag.
+
+    Returns the tag's unpeeled object name and its commit.
+    """
+    _git(workspace, "init", "--quiet")
+    _git(workspace, "commit", "--quiet", "--allow-empty", "-m", "Initial")
+    _git(workspace, "tag", "-a", tag, "-m", tag)
+    return {
+        "object": _git(workspace, "rev-parse", f"refs/tags/{tag}"),
+        "commit": _git(workspace, "rev-parse", f"refs/tags/{tag}^{{commit}}"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("event", "inputs", "expected"),
+    [
+        pytest.param({}, {}, True, id="tag-push"),
+        pytest.param(
+            {}, {"INPUTS_TAG_LOCATION": "v1.2.3"}, True, id="pushed-tag-named"
+        ),
+        pytest.param(
+            {"GITHUB_EVENT_NAME": "workflow_dispatch"}, {}, False, id="not-push"
+        ),
+        pytest.param({}, {"INPUTS_TAG_LOCATION": "v9.9.9"}, False, id="other-tag"),
+        pytest.param(
+            {"EVENT_PUSHED_AT": "2026-11-26T22:00:33Z"},
+            {},
+            False,
+            id="non-integer-pushed-at",
+        ),
+        pytest.param({"EVENT_PUSHED_AT": ""}, {}, False, id="missing-pushed-at"),
+        pytest.param(
+            {}, {"INPUTS_REQUIRE_RECENT": "false"}, False, id="recent-disabled"
+        ),
+        pytest.param(
+            {"EVENT_AFTER": OTHER_OBJECT}, {}, False, id="tag-replaced-since-push"
+        ),
+        pytest.param({"EVENT_AFTER": "commit"}, {}, False, id="after-is-commit"),
+        pytest.param({"EVENT_AFTER": ""}, {}, False, id="missing-after"),
+        pytest.param({"EVENT_AFTER": "not-a-sha"}, {}, False, id="malformed-after"),
+    ],
+)
+def test_push_time_reference_only_for_pushed_tag(
+    runner: ActionRunner,
+    event: dict[str, str],
+    inputs: dict[str, str],
+    expected: bool,
+) -> None:
+    """The push time is the age reference only for the pushed tag object."""
+    shas = _tag_workspace(runner.workspace, "v1.2.3")
+    after = event.get("EVENT_AFTER", "object")
+    runner.exported.update(
+        {**PUSH_EVENT, **event, "EVENT_AFTER": shas.get(after, after)}
+    )
+    runner.inputs.update(
+        {"INPUTS_TAG_STRING": "", "INPUTS_REQUIRE_RECENT": "true", **inputs}
+    )
+    runner.set_report(json.dumps({"success": True, "tag_name": "v1.2.3"}))
+
+    result = runner.run("Validate tag", repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = runner.uv_calls()
+    assert " verify " in call
+    assert (PUSH_REFERENCE in call) is expected
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        pytest.param(None, id="other-checkout"),
+        pytest.param("release/v1.2.3", id="tag-name-with-slash"),
+    ],
+)
+def test_push_time_reference_needs_local_pushed_tag(
+    runner: ActionRunner, tag: str | None
+) -> None:
+    """A checkout without the pushed tag object measures against the clock."""
+    name = tag or "v1.2.3"
+    if tag is None:
+        _git(runner.workspace, "init", "--quiet")
+        after = OTHER_OBJECT
+    else:
+        after = _tag_workspace(runner.workspace, name)["object"]
+    runner.exported.update(
+        {
+            **PUSH_EVENT,
+            "GITHUB_REF": f"refs/tags/{name}",
+            "GITHUB_REF_NAME": name,
+            "EVENT_AFTER": after,
+        }
+    )
+    runner.inputs.update({"INPUTS_TAG_STRING": "", "INPUTS_REQUIRE_RECENT": "true"})
+    runner.set_report(json.dumps({"success": True, "tag_name": name}))
+
+    result = runner.run("Validate tag", repository="example-org/caller")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = runner.uv_calls()
+    assert "--reference-time" not in call
+
+
 def _setup_uv_lookup(
     caller_env: dict[str, str],
     step_env: dict[str, str],

@@ -229,10 +229,24 @@ class WorkflowGatesMixin(WorkflowContext):
         from .models import TagAgeCheckInfo
 
         max_age = self.config.max_tag_age_minutes or 0.0
-        logger.debug(f"Checking tag age for {tag_name} (window: {max_age:g} minutes)")
+        reference_time = self.config.tag_age_reference_time
+        reference_source = (
+            (self.config.tag_age_reference_source or "supplied")
+            if reference_time
+            else "clock"
+        )
+        logger.debug(
+            f"Checking tag age for {tag_name} (window: {max_age:g} minutes, "
+            f"reference: {reference_source})"
+        )
 
         try:
-            check = check_tag_age(tag_info, max_age)
+            check = check_tag_age(
+                tag_info,
+                max_age,
+                now=reference_time,
+                reference_source=reference_source,
+            )
         except Exception as e:
             # Fail closed: an unexpected error must block the release
             # gate rather than abort validation entirely
@@ -241,6 +255,8 @@ class WorkflowGatesMixin(WorkflowContext):
                 recent=None,
                 tag_date=tag_info.tag_date,
                 max_age_minutes=max_age,
+                reference_time=(reference_time.isoformat() if reference_time else None),
+                reference_source=reference_source,
                 errors=[f"Tag age check failed: {e}"],
             )
             result.add_error(f"Tag age check failed for tag '{tag_name}': {e}")
@@ -248,7 +264,19 @@ class WorkflowGatesMixin(WorkflowContext):
         result.age_check = check
 
         if check.recent:
-            result.add_info(f"Tag was created within the last {max_age:g} minute(s)")
+            if reference_source == "push_event":
+                result.add_info(
+                    f"Tag was pushed within {max_age:g} minute(s) of its creation"
+                )
+            elif reference_source == "supplied":
+                result.add_info(
+                    f"Tag was created within {max_age:g} minute(s) before "
+                    f"the reference time {check.reference_time}"
+                )
+            else:
+                result.add_info(
+                    f"Tag was created within the last {max_age:g} minute(s)"
+                )
             return True
 
         for error in check.errors:

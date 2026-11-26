@@ -435,6 +435,21 @@ local clone or fork) from creating faulty releases.
 - Uses the tag object's creation timestamp, so the check needs an
   annotated (or signed) tag; lightweight tags fail closed because they
   carry no creation timestamp
+- On a tag push event, measures the age at the moment GitHub received
+  the push (`github.event.repository.pushed_at`), not when the
+  workflow runs, so delays in GitHub starting the run do not count
+  against the tag. This applies when the validated tag is the
+  pushed tag (`GITHUB_REF` is `refs/tags/<tag>`, with no `/` or `@`
+  in the name) and the tag object in the checkout is the one the push
+  delivered (`github.event.after`); every other case measures against
+  the runner's clock at validation time
+- A workflow re-run replays the original event, so it measures against
+  the original push time: the gate stops stale tags being pushed, and
+  does not penalise slow or repeated runs. A tag replaced since that
+  push is no longer the pushed object, so its re-run measures against
+  the clock
+- A push time more than five minutes after the runner's clock fails
+  closed (the reference cannot be trusted)
 - Timestamps more than five minutes in the future fail closed (the
   timestamp cannot be trusted)
 - Note: tagger timestamps come from the tag creator's clock and are

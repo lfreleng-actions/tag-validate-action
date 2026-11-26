@@ -112,6 +112,10 @@ inputs:
       for the default 3-minute window, or a number of minutes. Uses
       the tag object's creation timestamp, so an annotated (or
       signed) tag is required; lightweight tags fail this check.
+      When validating the tag object a push event delivered, the age
+      is measured at the time GitHub received the push (re-runs reuse
+      that time unless the tag was replaced since); otherwise it is
+      measured at validation time.
       Empty, 'false', 'no', or '0' disable the check. Requires a
       repository context; not supported with tag_string.
     required: false
@@ -512,6 +516,29 @@ runs:
           VERIFY_ARGS+=("--require-recent" "${REQUIRE_RECENT}")
         fi
 
+        # On a push of the tag being validated, measure its age at the
+        # time GitHub received the push, so delays in starting this run
+        # do not count against the tag. GitHub writes pushed_at (integer
+        # epoch seconds) into the event payload; the tagger cannot set it.
+        # The push time belongs to the object the push delivered
+        # (event 'after', the tag object for an annotated tag). A re-run
+        # replays the event but validates the tag as it is now, so a tag
+        # replaced since, or a checkout of another repository, falls
+        # back to the clock. A name holding '/' or '@' is not read as a
+        # tag in this checkout, so it falls back too.
+        if [ -n "${REQUIRE_RECENT}" ] && [ "${GITHUB_EVENT_NAME:-}" = "push" ] && \
+           [ "${GITHUB_REF:-}" = "refs/tags/${TAG_LOCATION}" ] && \
+           [[ "${TAG_LOCATION}" != */* && "${TAG_LOCATION}" != *@* ]] && \
+           [[ "${EVENT_PUSHED_AT:-}" =~ ^[0-9]+$ ]] && \
+           [[ "${EVENT_AFTER:-}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+          LOCAL_TAG_OBJECT=$(git rev-parse --verify --quiet "refs/tags/${TAG_LOCATION}" 2>/dev/null || true)
+          if [ "${LOCAL_TAG_OBJECT}" = "${EVENT_AFTER}" ]; then
+            VERIFY_ARGS+=("--reference-time" "${EVENT_PUSHED_AT}" "--reference-source" "push_event")
+          else
+            echo "ℹ️ Tag '${TAG_LOCATION}' is not the object this push delivered; measuring its age at validation time"
+          fi
+        fi
+
         # Add require-latest flag if enabled (only for verify command)
         if [ "${REQUIRE_LATEST}" = "true" ]; then
           VERIFY_ARGS+=("--require-latest")
@@ -773,6 +800,8 @@ runs:
         INPUTS_ENFORCE_INCREMENT: ${{ inputs.enforce_increment }}
         INPUTS_REQUIRE_BRANCH: ${{ inputs.require_branch }}
         INPUTS_REQUIRE_RECENT: ${{ inputs.require_recent }}
+        EVENT_PUSHED_AT: ${{ github.event.repository.pushed_at }}
+        EVENT_AFTER: ${{ github.event.after }}
         INPUTS_REQUIRE_LATEST: ${{ inputs.require_latest }}
         INPUTS_PERMIT_MISSING: ${{ inputs.permit_missing }}
         INPUTS_DEBUG: ${{ inputs.debug }}

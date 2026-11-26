@@ -38,10 +38,42 @@ def _format_age(seconds: float) -> str:
     return f"{seconds / 86400:.1f} days"
 
 
+def _as_utc(moment: datetime) -> datetime:
+    """Treat a naive datetime as UTC."""
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def _stale_message(
+    tag_name: str, tag_date: str, age_seconds: float, info: TagAgeCheckInfo
+) -> str:
+    """Describe a tag older than the window, worded for its reference."""
+    age = _format_age(age_seconds)
+    if info.reference_source == "push_event":
+        lead = (
+            f"Tag '{tag_name}' was pushed {age} after it was created "
+            f"(created {tag_date}, pushed {info.reference_time})"
+        )
+    elif info.reference_source == "supplied":
+        lead = (
+            f"Tag '{tag_name}' was created {age} before the reference "
+            f"time {info.reference_time} ({tag_date})"
+        )
+    else:
+        lead = f"Tag '{tag_name}' was created {age} ago ({tag_date})"
+    return (
+        f"{lead}, exceeding the require_recent window of "
+        f"{info.max_age_minutes:g} minute(s); stale tags must be "
+        "recreated before release"
+    )
+
+
 def check_tag_age(
     tag_info: TagInfo,
     max_age_minutes: float,
     now: datetime | None = None,
+    *,
+    reference_source: str = "clock",
+    current_time: datetime | None = None,
 ) -> TagAgeCheckInfo:
     """Check that a tag was created within the allowed time window.
 
@@ -62,11 +94,22 @@ def check_tag_age(
         tag_info: Tag metadata (provides tag type and creation date)
         max_age_minutes: Maximum permitted tag age, in minutes
         now: Reference time for age calculation (defaults to UTC now)
+        reference_source: Where ``now`` came from: 'clock', or
+            'push_event'/'supplied' for a reference taken from outside
+            this process, which must not lie in the future
+        current_time: The current time, against which an external
+            reference is checked (defaults to UTC now)
 
     Returns:
         TagAgeCheckInfo with the age check outcome
     """
-    info = TagAgeCheckInfo(checked=True, max_age_minutes=max_age_minutes)
+    reference = _as_utc(now or datetime.now(UTC))
+    info = TagAgeCheckInfo(
+        checked=True,
+        max_age_minutes=max_age_minutes,
+        reference_time=reference.isoformat(),
+        reference_source=reference_source,
+    )
     tag_name = tag_info.tag_name
 
     # Defense in depth: the CLI validates its input, but programmatic
@@ -79,6 +122,20 @@ def check_tag_age(
             "must be a finite positive number of minutes"
         )
         return info
+
+    # An external reference after the current time cannot be right, and
+    # trusting it would let a stale tag look fresh relative to the clock
+    if reference_source != "clock":
+        current = _as_utc(current_time or datetime.now(UTC))
+        ahead_seconds = (reference - current).total_seconds()
+        if ahead_seconds > CLOCK_SKEW_TOLERANCE_SECONDS:
+            info.recent = None
+            info.errors.append(
+                f"Tag age reference time {info.reference_time} "
+                f"({reference_source}) is {_format_age(ahead_seconds)} "
+                "in the future; the reference cannot be trusted"
+            )
+            return info
 
     if tag_info.tag_type != "annotated":
         info.recent = None
@@ -107,10 +164,8 @@ def check_tag_age(
             f"'{tag_info.tag_date}': {e}"
         )
         return info
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
+    created = _as_utc(created)
 
-    reference = now or datetime.now(UTC)
     age_seconds = (reference - created).total_seconds()
     info.tag_date = tag_info.tag_date
 
@@ -133,10 +188,7 @@ def check_tag_age(
     if age_seconds > max_age_minutes * 60:
         info.recent = False
         info.errors.append(
-            f"Tag '{tag_name}' was created {_format_age(age_seconds)} "
-            f"ago ({tag_info.tag_date}), exceeding the require_recent "
-            f"window of {max_age_minutes:g} minute(s); stale tags must "
-            "be recreated before release"
+            _stale_message(tag_name, tag_info.tag_date, age_seconds, info)
         )
     else:
         info.recent = True

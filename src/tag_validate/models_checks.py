@@ -136,10 +136,23 @@ class TagAgeCheckInfo(BaseModel):
         default=None, description="ISO 8601 timestamp when the tag was created"
     )
     age_seconds: float | None = Field(
-        default=None, description="Age of the tag at validation time, in seconds"
+        default=None,
+        description="Age of the tag at the reference time, in seconds",
     )
     max_age_minutes: float | None = Field(
         default=None, description="Maximum permitted tag age, in minutes"
+    )
+    reference_time: str | None = Field(
+        default=None,
+        description="ISO 8601 instant the tag's age was measured against",
+    )
+    reference_source: str | None = Field(
+        default=None,
+        description=(
+            "Where the reference time came from: 'clock' (validation "
+            "time), 'push_event' (when GitHub received the tag push) "
+            "or 'supplied' (given explicitly)"
+        ),
     )
     errors: list[str] = Field(
         default_factory=list, description="Errors encountered during the check"

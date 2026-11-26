@@ -1680,6 +1680,45 @@ jobs:
           print('✅ Repository info builder tests passed')
           "
 
+      - name: "Test tag age reference time"
+        shell: bash
+        run: |
+          # A tag created in 2020 is stale against the clock, but fresh
+          # against a push one minute after its creation
+          repo="${RUNNER_TEMP}/age-reference-repo"
+          git init -q -b main "${repo}"
+          cd "${repo}"
+          git -c user.name=ci -c user.email=ci@example.invalid \
+            commit -q --allow-empty -m "Initial commit"
+          GIT_COMMITTER_DATE="2020-01-01T00:00:00 +0000" \
+            git -c user.name=ci -c user.email=ci@example.invalid \
+            tag -a v1.0.0 -m "Release v1.0.0"
+
+          # Epoch seconds for 2020-01-01T00:01:00Z
+          tag-validate verify v1.0.0 --require-recent true \
+            --reference-time 1577836860 --reference-source push_event \
+            --json | jq -e '.success == true and .recent == true
+              and .tag_age_reference_source == "push_event"'
+
+          # ISO 8601 reference ten minutes after creation: stale
+          rc=0
+          tag-validate verify v1.0.0 --require-recent true \
+            --reference-time 2020-01-01T00:10:00Z --json || rc=$?
+          if [ "${rc}" -ne 9 ]; then
+            echo "ERROR: expected exit 9 for a stale tag, got ${rc}"
+            exit 1
+          fi
+
+          # Unparsable reference: invalid input
+          rc=0
+          tag-validate verify v1.0.0 --require-recent true \
+            --reference-time soon --json || rc=$?
+          if [ "${rc}" -ne 3 ]; then
+            echo "ERROR: expected exit 3 for a bad reference, got ${rc}"
+            exit 1
+          fi
+          echo "✅ Tag age reference time tests passed"
+
   test-summary:
     name: "Test Results Summary"
     runs-on: ubuntu-latest

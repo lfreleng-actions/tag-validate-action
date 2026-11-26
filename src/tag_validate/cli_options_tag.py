@@ -182,6 +182,25 @@ VERIFY_REQUIRE_RECENT = typer.Option(
     ),
 )
 
+VERIFY_REFERENCE_TIME = typer.Option(
+    None,
+    "--reference-time",
+    help=(
+        "Instant to measure the tag's age against for --require-recent, "
+        "as an ISO 8601 timestamp or integer Unix epoch seconds. "
+        "Defaults to the current time."
+    ),
+)
+
+VERIFY_REFERENCE_SOURCE = typer.Option(
+    None,
+    "--reference-source",
+    help=(
+        "Where --reference-time came from: 'push_event' (when GitHub "
+        "received the tag push) or 'supplied' (default)"
+    ),
+)
+
 VERIFY_REQUIRE_LATEST = typer.Option(
     False,
     "--require-latest",

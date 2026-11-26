@@ -39,6 +39,7 @@ Run with verbose output:
 
 import json
 import re
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -837,6 +838,77 @@ class TestRequireRecentLatestOptions:
         result = self._invoke(mock_workflow_class, [f"--require-recent={value}"])
 
         assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_time_iso_accepted(self, mock_workflow_class):
+        """An ISO 8601 --reference-time is parsed as a supplied reference."""
+        result = self._invoke(
+            mock_workflow_class,
+            ["--require-recent", "true", "--reference-time", "2026-11-26T22:00:33Z"],
+        )
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.tag_age_reference_time == datetime(
+            2026, 11, 26, 22, 0, 33, tzinfo=UTC
+        )
+        assert call_args.tag_age_reference_source == "supplied"
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_time_epoch_push_event_accepted(self, mock_workflow_class):
+        """Integer epoch seconds and a push_event source are accepted."""
+        pushed = datetime(2026, 11, 26, 22, 0, 33, tzinfo=UTC)
+        result = self._invoke(
+            mock_workflow_class,
+            [
+                "--require-recent",
+                "true",
+                "--reference-time",
+                str(int(pushed.timestamp())),
+                "--reference-source",
+                "push_event",
+            ],
+        )
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.tag_age_reference_time == pushed
+        assert call_args.tag_age_reference_source == "push_event"
+
+    @pytest.mark.parametrize("value", ["soon", "1.5", "-5", "2026-13-01", "9" * 30])
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_time_invalid_rejected(self, mock_workflow_class, value):
+        """Values that are neither ISO 8601 nor epoch seconds are rejected."""
+        result = self._invoke(mock_workflow_class, [f"--reference-time={value}"])
+
+        assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_source_invalid_rejected(self, mock_workflow_class):
+        """An unknown --reference-source is rejected."""
+        result = self._invoke(
+            mock_workflow_class,
+            ["--reference-time", "1700000000", "--reference-source", "tagger"],
+        )
+
+        assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_source_without_time_rejected(self, mock_workflow_class):
+        """--reference-source without --reference-time is rejected."""
+        result = self._invoke(mock_workflow_class, ["--reference-source", "push_event"])
+
+        assert result.exit_code == 3
+
+    @patch("tag_validate.cli.ValidationWorkflow")
+    def test_reference_time_absent_uses_clock(self, mock_workflow_class):
+        """Without --reference-time, no reference is configured."""
+        result = self._invoke(mock_workflow_class, ["--require-recent", "true"])
+
+        assert result.exit_code == 0
+        call_args = mock_workflow_class.call_args[0][0]
+        assert call_args.tag_age_reference_time is None
+        assert call_args.tag_age_reference_source is None
 
     @patch("tag_validate.cli.ValidationWorkflow")
     def test_require_latest_flag(self, mock_workflow_class):

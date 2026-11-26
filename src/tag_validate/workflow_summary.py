@@ -191,6 +191,10 @@ class WorkflowSummaryMixin(WorkflowContext):
             lines.append(f"  Window: {ac.max_age_minutes:g} minute(s)")
         if ac.age_seconds is not None:
             lines.append(f"  Tag Age: {ac.age_seconds:.0f} seconds")
+        if ac.reference_time:
+            lines.append(
+                f"  Measured Against: {ac.reference_time} ({ac.reference_source})"
+            )
         lines.append("")
         return lines
 

@@ -151,6 +151,17 @@ class ValidationConfig(BaseModel):
             "minutes (None disables the check)"
         ),
     )
+    tag_age_reference_time: datetime | None = Field(
+        default=None,
+        description=(
+            "Instant to measure the tag's age against (None measures "
+            "against the clock at validation time)"
+        ),
+    )
+    tag_age_reference_source: Literal["push_event", "supplied"] | None = Field(
+        default=None,
+        description="Where tag_age_reference_time came from",
+    )
     require_latest: bool = Field(
         default=False,
         description=(
