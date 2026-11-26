@@ -765,6 +765,37 @@ class TestWorkflowIntegration:
         assert result.age_check.recent is False
 
     @pytest.mark.asyncio
+    async def test_require_recent_measures_against_reference(
+        self, git_repo, no_actions_env
+    ):
+        """An old tag passes when pushed within the window of creation."""
+        import os
+
+        subprocess.run(
+            ["git", "tag", "-a", "v1.0.0", "-m", "Release"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+            env={
+                **os.environ,
+                "GIT_COMMITTER_DATE": "2020-01-01T00:00:00 +0000",
+            },
+        )
+
+        config = ValidationConfig(
+            max_tag_age_minutes=3.0,
+            tag_age_reference_time=datetime(2020, 1, 1, 0, 1, tzinfo=UTC),
+            tag_age_reference_source="push_event",
+        )
+        workflow = ValidationWorkflow(config, repo_path=git_repo)
+        result = await workflow.validate_tag("v1.0.0")
+
+        assert result.age_check is not None
+        assert result.age_check.recent is True
+        assert result.age_check.reference_source == "push_event"
+        assert any("pushed within 3 minute(s)" in m for m in result.info)
+
+    @pytest.mark.asyncio
     async def test_require_recent_fails_lightweight_tag(self, git_repo, no_actions_env):
         """A lightweight tag fails the age check closed."""
         _git(git_repo, "tag", "v1.0.0")
@@ -928,6 +959,126 @@ class TestCheckTagAge:
         naive = (self.NOW - timedelta(minutes=1)).replace(tzinfo=None)
         info = check_tag_age(_tag_info(tag_date=naive.isoformat()), 3.0, now=self.NOW)
         assert info.recent is True
+
+    def test_push_reference_ignores_run_start_delay(self):
+        """A tag pushed 11s after creation passes despite a late run.
+
+        Mirrors the v0.1.7 timeline: created 22:00:22, pushed 22:00:33,
+        validated about 11 minutes later.
+        """
+        created = datetime(2026, 11, 26, 22, 0, 22, tzinfo=UTC)
+        pushed = datetime(2026, 11, 26, 22, 0, 33, tzinfo=UTC)
+        validated = datetime(2026, 11, 26, 22, 11, 48, tzinfo=UTC)
+        info = check_tag_age(
+            _tag_info(tag_date=created.isoformat()),
+            3.0,
+            now=pushed,
+            reference_source="push_event",
+            current_time=validated,
+        )
+        assert info.recent is True
+        assert info.age_seconds == pytest.approx(11.0)
+        assert info.reference_time == pushed.isoformat()
+        assert info.reference_source == "push_event"
+
+    def test_push_reference_tag_stale_at_push_fails(self):
+        """A tag created long before its push still fails, worded as pushed."""
+        info = check_tag_age(
+            _tag_info(tag_date=self._at(minutes=10)),
+            3.0,
+            now=self.NOW,
+            reference_source="push_event",
+            current_time=self.NOW,
+        )
+        assert info.recent is False
+        assert any(
+            "was pushed 10.0 minutes after it was created" in e for e in info.errors
+        )
+
+    def test_supplied_reference_stale_message(self):
+        """A supplied reference names the reference time in the failure."""
+        info = check_tag_age(
+            _tag_info(tag_date=self._at(minutes=10)),
+            3.0,
+            now=self.NOW,
+            reference_source="supplied",
+            current_time=self.NOW,
+        )
+        assert info.recent is False
+        assert any(
+            f"before the reference time {self.NOW.isoformat()}" in e
+            for e in info.errors
+        )
+
+    def test_future_reference_fails_closed(self):
+        """A reference beyond the skew tolerance after now fails closed."""
+        info = check_tag_age(
+            _tag_info(tag_date=self.NOW.isoformat()),
+            3.0,
+            now=self.NOW + timedelta(hours=1),
+            reference_source="push_event",
+            current_time=self.NOW,
+        )
+        assert info.recent is None
+        assert info.age_seconds is None
+        assert any("reference cannot be trusted" in e for e in info.errors)
+
+    def test_reference_within_skew_tolerance_accepted(self):
+        """A reference slightly ahead of now (clock skew) is accepted."""
+        info = check_tag_age(
+            _tag_info(tag_date=self.NOW.isoformat()),
+            3.0,
+            now=self.NOW + timedelta(minutes=1),
+            reference_source="push_event",
+            current_time=self.NOW,
+        )
+        assert info.recent is True
+
+    def test_push_reference_lightweight_still_fails_closed(self):
+        """A push reference does not change the lightweight-tag failure."""
+        info = check_tag_age(
+            _tag_info(tag_type="lightweight"),
+            3.0,
+            now=self.NOW,
+            reference_source="push_event",
+            current_time=self.NOW,
+        )
+        assert info.recent is None
+        assert any("lightweight" in e for e in info.errors)
+
+    def test_clock_reference_reported(self):
+        """Without a supplied reference, the clock is reported as source."""
+        info = check_tag_age(_tag_info(tag_date=self._at(minutes=1)), 3.0, now=self.NOW)
+        assert info.reference_source == "clock"
+        assert info.reference_time == self.NOW.isoformat()
+
+    def test_reference_reported_in_outputs(self):
+        """JSON, console summary and step summary all show the reference."""
+        from tag_validate.cli_verify_output import build_console_output
+        from tag_validate.github_summary import build_summary_markdown
+        from tag_validate.models import TagAgeCheckInfo, ValidationResult
+
+        age_check = TagAgeCheckInfo(
+            checked=True,
+            recent=True,
+            max_age_minutes=3.0,
+            reference_time=self.NOW.isoformat(),
+            reference_source="push_event",
+        )
+        result = ValidationResult(
+            tag_name="v1.0.0", config=ValidationConfig(), age_check=age_check
+        )
+
+        output = build_console_output(result)
+        assert output["tag_age_reference_time"] == self.NOW.isoformat()
+        assert output["tag_age_reference_source"] == "push_event"
+
+        markdown = "\n".join(build_summary_markdown(result, "v1.0.0"))
+        assert f"`{self.NOW.isoformat()}` (push_event)" in markdown
+
+        workflow = ValidationWorkflow(ValidationConfig())
+        summary = workflow.create_validation_summary(result)
+        assert f"{self.NOW.isoformat()} (push_event)" in summary
 
 
 class TestCheckLatestCommit:

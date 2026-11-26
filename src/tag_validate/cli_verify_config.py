@@ -10,9 +10,11 @@ them and assembles the typed configuration the workflow needs.
 """
 
 import math
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple, cast
 
 import typer
 
@@ -56,6 +58,8 @@ class VerifyOptions:
     enforce_increment: bool
     require_branch: str | None
     require_recent: str | None
+    reference_time: str | None
+    reference_source: str | None
     require_latest: bool
     skip_version_validation: bool
     permit_missing: bool
@@ -83,6 +87,18 @@ class DerivedRequirements(NamedTuple):
     require_gerrit: bool
     gerrit_server: str | None
     max_tag_age_minutes: float | None
+    reference: "AgeReference"
+
+
+class AgeReference(NamedTuple):
+    """Reference instant for the tag age check, parsed from the CLI."""
+
+    time: datetime | None
+    source: Literal["push_event", "supplied"] | None
+
+
+REFERENCE_SOURCES = ("push_event", "supplied")
+_EPOCH_SECONDS = re.compile(r"[0-9]+")
 
 
 class SignatureRequirements(NamedTuple):
@@ -149,6 +165,77 @@ def parse_gerrit_requirement(require_gerrit: str | None) -> tuple[bool, str | No
     return False, None
 
 
+def _reject_input(error_msg: str, json_output: bool) -> typer.Exit:
+    """Report invalid CLI input and build the exit to raise."""
+    if json_output:
+        console.print_json(
+            data={
+                "success": False,
+                "error": error_msg,
+                "exit_code": EXIT_INVALID_INPUT,
+            }
+        )
+    else:
+        console.print(f"\n[red]❌ Error:[/red] {error_msg}")
+    return typer.Exit(EXIT_INVALID_INPUT)
+
+
+def _parse_instant(value: str) -> datetime | None:
+    """Parse ISO 8601 or integer Unix epoch seconds as an aware datetime."""
+    try:
+        if _EPOCH_SECONDS.fullmatch(value):
+            return datetime.fromtimestamp(int(value), UTC)
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def parse_reference_time(
+    reference_time: str | None, reference_source: str | None, json_output: bool
+) -> AgeReference:
+    """Parse ``--reference-time`` and ``--reference-source``.
+
+    Args:
+        reference_time: ISO 8601 timestamp or integer Unix epoch seconds
+        reference_source: 'push_event', 'supplied', or None ('supplied')
+        json_output: Whether the command is emitting JSON
+
+    Returns:
+        The reference instant and its source, or (None, None) to
+        measure against the clock
+
+    Raises:
+        typer.Exit: If either value is invalid, or a source is given
+            without a time
+    """
+    time_value = (reference_time or "").strip()
+    source_value = (reference_source or "").strip().lower()
+
+    if source_value and source_value not in REFERENCE_SOURCES:
+        raise _reject_input(
+            f"Invalid --reference-source value '{reference_source}': "
+            f"pass one of {', '.join(REFERENCE_SOURCES)}",
+            json_output,
+        )
+    if not time_value:
+        if source_value:
+            raise _reject_input(
+                "--reference-source requires --reference-time", json_output
+            )
+        return AgeReference(None, None)
+
+    parsed = _parse_instant(time_value)
+    if parsed is None:
+        raise _reject_input(
+            f"Invalid --reference-time value '{reference_time}': pass "
+            "an ISO 8601 timestamp or integer Unix epoch seconds",
+            json_output,
+        )
+    source = cast(Literal["push_event", "supplied"], source_value or "supplied")
+    return AgeReference(parsed, source)
+
+
 def parse_recent_requirement(
     require_recent: str | None, json_output: bool
 ) -> float | None:
@@ -181,22 +268,12 @@ def parse_recent_requirement(
         or not math.isfinite(max_tag_age_minutes)
         or max_tag_age_minutes <= 0
     ):
-        error_msg = (
+        raise _reject_input(
             f"Invalid --require-recent value "
             f"'{require_recent}': pass 'true' or a "
-            "positive number of minutes"
+            "positive number of minutes",
+            json_output,
         )
-        if json_output:
-            console.print_json(
-                data={
-                    "success": False,
-                    "error": error_msg,
-                    "exit_code": EXIT_INVALID_INPUT,
-                }
-            )
-        else:
-            console.print(f"\n[red]❌ Error:[/red] {error_msg}")
-        raise typer.Exit(EXIT_INVALID_INPUT)
 
     return max_tag_age_minutes
 
@@ -279,6 +356,8 @@ def _build_validation_config(
         enforce_increment=options.enforce_increment,
         require_branch=_normalize_branch_requirement(options.require_branch),
         max_tag_age_minutes=derived.max_tag_age_minutes,
+        tag_age_reference_time=derived.reference.time,
+        tag_age_reference_source=derived.reference.source,
         require_latest=options.require_latest,
         config_source="CLI",  # Mark as CLI-originated config
     )
@@ -301,6 +380,9 @@ def build_verify_plan(options: VerifyOptions, credentials_lookup: Any) -> Verify
     max_tag_age_minutes = parse_recent_requirement(
         options.require_recent, options.json_output
     )
+    reference = parse_reference_time(
+        options.reference_time, options.reference_source, options.json_output
+    )
 
     derived = DerivedRequirements(
         signatures=signatures,
@@ -309,6 +391,7 @@ def build_verify_plan(options: VerifyOptions, credentials_lookup: Any) -> Verify
         require_gerrit=require_gerrit,
         gerrit_server=gerrit_server,
         max_tag_age_minutes=max_tag_age_minutes,
+        reference=reference,
     )
     return VerifyPlan(
         config=_build_validation_config(options, derived),

@@ -160,6 +160,11 @@ def _age_rows(age_check: TagAgeCheckInfo) -> list[str]:
         rows.append(
             f"| **Freshness Window** | `{age_check.max_age_minutes:g} minute(s)` |"
         )
+    if age_check.reference_time:
+        rows.append(
+            f"| **Age Measured Against** | `{age_check.reference_time}` "
+            f"({age_check.reference_source}) |"
+        )
     return rows
 
 

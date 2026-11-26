@@ -91,6 +91,8 @@ def _add_gating_results(output: dict[str, Any], result: Any) -> None:
         output["recent"] = result.age_check.recent
         output["tag_age_seconds"] = result.age_check.age_seconds
         output["max_tag_age_minutes"] = result.age_check.max_age_minutes
+        output["tag_age_reference_time"] = result.age_check.reference_time
+        output["tag_age_reference_source"] = result.age_check.reference_source
     if result.latest_check and result.latest_check.checked:
         output["latest"] = result.latest_check.latest
         output["latest_branch"] = result.latest_check.branch
