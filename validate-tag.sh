@@ -946,9 +946,15 @@ if [ -z "$tag_string" ]; then
         if [ "$tag_object_type" = "tag" ]; then
           echo "✓ Annotated tag detected (has tag object)"
 
-          # Get tag verification output and exit code
+          # Get tag verification output and exit code. git verify-tag
+          # writes everything detect_signature_type reads to stderr:
+          # --raw sends the GPG status lines ([GNUPG:] GOODSIG, BADSIG,
+          # ERRSIG) there, and SSH verification reports its
+          # 'Good "git" signature' line there too (git-verify-tag(1)).
+          # Capture stderr alone, so nothing on stdout can reach the
+          # parser and pass for a status line.
           verify_exit_code=0
-          verify_output=$(git verify-tag --raw "$tag_name" 2>&1) || \
+          verify_output=$(git verify-tag --raw "$tag_name" 2>&1 >/dev/null) || \
             verify_exit_code=$?
 
           # Debug: Show verify output
