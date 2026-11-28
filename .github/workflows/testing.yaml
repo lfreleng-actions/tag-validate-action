@@ -799,6 +799,116 @@ jobs:
 
           echo "✓ v0.1.1 validated correctly as SSH-signed SemVer"
 
+  ### Test Supplied GPG Keys and Fingerprint Pin ###
+  test-trusted-gpg-keys:
+    name: "Test Trusted GPG Keys"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: "Create throwaway keys and a signed tag"
+        id: keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both keys live in the runner's default keyring, so the
+          # failing cases show that only the supplied keys count
+          gpg --batch --passphrase '' --quick-gen-key \
+            'Release Test <release@example.org>' ed25519 sign 1d
+          gpg --batch --passphrase '' --quick-gen-key \
+            'Decoy Test <decoy@example.org>' ed25519 sign 1d
+          fpr() {
+            gpg --with-colons --list-keys "$1" |
+              awk -F: '/^fpr/ {print $10; exit}'
+          }
+          RELEASE_FPR=$(fpr release@example.org)
+          DECOY_FPR=$(fpr decoy@example.org)
+
+          git config user.name "Release Test"
+          git config user.email "release@example.org"
+          git config user.signingkey "${RELEASE_FPR}"
+          git tag -s -m "Trusted key test" v0.0.1-trusted-gpg
+
+          DELIM="EOF_$(openssl rand -hex 8)"
+          {
+            echo "release_fpr=${RELEASE_FPR}"
+            echo "decoy_fpr=${DECOY_FPR}"
+            echo "release_key<<${DELIM}"
+            gpg --armor --export "${RELEASE_FPR}"
+            echo "${DELIM}"
+            echo "decoy_key<<${DELIM}"
+            gpg --armor --export "${DECOY_FPR}"
+            echo "${DELIM}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: "Test supplied key with matching fingerprint"
+        uses: $/
+        id: pinned
+        with:
+          tag_location: v0.0.1-trusted-gpg
+          require_signed: gpg
+          trusted_gpg_keys: ${{ steps.keys.outputs.release_key }}
+          require_fingerprint: ${{ steps.keys.outputs.release_fpr }}
+
+      - name: "Verify the pinned key passed"
+        shell: bash
+        run: |
+          if [ "${VALID}" != "true" ]; then
+            echo "Error: Tag signed by the pinned key should pass"
+            exit 1
+          fi
+          if [ "${SIGNING_FPR}" != "${RELEASE_FPR}" ]; then
+            echo "Error: signing_key_fingerprint is '${SIGNING_FPR}'"
+            echo "Expected the pinned key '${RELEASE_FPR}'"
+            exit 1
+          fi
+          echo "✓ Supplied key and fingerprint pin pass"
+        env:
+          VALID: ${{ steps.pinned.outputs.valid }}
+          SIGNING_FPR: ${{ steps.pinned.outputs.signing_key_fingerprint }}
+          RELEASE_FPR: ${{ steps.keys.outputs.release_fpr }}
+
+      - name: "Test fingerprint mismatch - should fail"
+        uses: $/
+        id: mismatch
+        continue-on-error: true
+        with:
+          tag_location: v0.0.1-trusted-gpg
+          trusted_gpg_keys: ${{ steps.keys.outputs.release_key }}
+          require_fingerprint: ${{ steps.keys.outputs.decoy_fpr }}
+
+      - name: "Verify fingerprint mismatch failed"
+        if: steps.mismatch.outcome == 'success'
+        shell: bash
+        run: |
+          echo "Error: A tag signed by a key that is not pinned should fail"
+          exit 1
+
+      - name: "Test signing key missing from supplied keys - should fail"
+        uses: $/
+        id: not-supplied
+        continue-on-error: true
+        with:
+          tag_location: v0.0.1-trusted-gpg
+          trusted_gpg_keys: ${{ steps.keys.outputs.decoy_key }}
+          require_fingerprint: ${{ steps.keys.outputs.release_fpr }}
+
+      - name: "Verify the default keyring was not used"
+        if: steps.not-supplied.outcome == 'success'
+        shell: bash
+        run: |
+          echo "Error: The signing key is in the default keyring alone"
+          echo "Verification must use the supplied keys, so the tag must fail"
+          exit 1
+
   ### Test Signature Requirements ###
   test-signature-requirements:
     name: "Test Signature Requirements"
@@ -1729,6 +1839,7 @@ jobs:
       - test-remote-tags
       - test-signatures
       - test-local-ssh-tags
+      - test-trusted-gpg-keys
       - test-signature-requirements
       - test-development-tags
       - test-input-priority
@@ -1753,6 +1864,7 @@ jobs:
             echo "✅ Local tag tests"
             echo "✅ Remote tag tests"
             echo "✅ Signature tests"
+            echo "✅ Trusted GPG key tests"
             echo "✅ Development tag tests"
             echo "✅ Input priority tests"
             echo "✅ Edge case tests"

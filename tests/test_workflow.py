@@ -673,7 +673,9 @@ class TestValidationWorkflow:
             result = await workflow._detect_signature("v1.2.3", mock_tag_info)
 
             assert result == mock_signature
-            mock_detect.assert_called_once_with("v1.2.3")
+            mock_detect.assert_called_once_with(
+                "v1.2.3", trusted_gpg_keys=None, permit_expired_key=False
+            )
 
     @pytest.mark.asyncio
     async def test_require_github_key_gpg(self):

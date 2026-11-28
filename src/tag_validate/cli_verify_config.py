@@ -16,8 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
-import typer
-
 from .cli_credentials import (
     NetrcLookup,
     probe_netrc_for_discovery,
@@ -28,7 +26,8 @@ from .cli_parsing import (
     validate_signature_types,
     validate_version_types,
 )
-from .cli_runtime import EXIT_INVALID_INPUT, console
+from .cli_runtime import reject_input as _reject_input
+from .cli_verify_gpg import GpgTrust, parse_gpg_trust
 from .increment_check import DEFAULT_TAG_AGE_MINUTES
 from .models import ValidationConfig
 
@@ -66,6 +65,9 @@ class VerifyOptions:
     json_output: bool
     json_file: Path | None
     github_step_summary: bool
+    trusted_gpg_keys: Path | None = None
+    require_fingerprint: str | None = None
+    permit_expired_key: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ class DerivedRequirements(NamedTuple):
     """Requirements parsed out of the raw ``verify`` option strings."""
 
     signatures: "SignatureRequirements"
+    gpg_trust: GpgTrust
     version_types: list[str]
     require_github: bool
     require_gerrit: bool
@@ -163,21 +166,6 @@ def parse_gerrit_requirement(require_gerrit: str | None) -> tuple[bool, str | No
         return True, require_gerrit
 
     return False, None
-
-
-def _reject_input(error_msg: str, json_output: bool) -> typer.Exit:
-    """Report invalid CLI input and build the exit to raise."""
-    if json_output:
-        console.print_json(
-            data={
-                "success": False,
-                "error": error_msg,
-                "exit_code": EXIT_INVALID_INPUT,
-            }
-        )
-    else:
-        console.print(f"\n[red]❌ Error:[/red] {error_msg}")
-    return typer.Exit(EXIT_INVALID_INPUT)
 
 
 def _parse_instant(value: str) -> datetime | None:
@@ -347,6 +335,9 @@ def _build_validation_config(
         allowed_signature_types=(
             derived.signatures.allowed_types if options.require_signed else None
         ),
+        trusted_gpg_keys=derived.gpg_trust.trusted_gpg_keys,
+        require_fingerprints=derived.gpg_trust.require_fingerprints,
+        permit_expired_key=options.permit_expired_key,
         require_github=derived.require_github,
         require_gerrit=derived.require_gerrit,
         gerrit_server=derived.gerrit_server,
@@ -366,6 +357,9 @@ def _build_validation_config(
 def build_verify_plan(options: VerifyOptions, credentials_lookup: Any) -> VerifyPlan:
     """Parse every requirement option into a ready-to-run plan."""
     signatures = parse_signature_requirements(options.require_signed)
+    gpg_trust = parse_gpg_trust(
+        options.trusted_gpg_keys, options.require_fingerprint, options.json_output
+    )
     version_types = parse_version_requirements(
         options.require_type, options.skip_version_validation
     )
@@ -386,6 +380,7 @@ def build_verify_plan(options: VerifyOptions, credentials_lookup: Any) -> Verify
 
     derived = DerivedRequirements(
         signatures=signatures,
+        gpg_trust=gpg_trust,
         version_types=version_types,
         require_github=require_github,
         require_gerrit=require_gerrit,

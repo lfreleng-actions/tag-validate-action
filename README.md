@@ -101,24 +101,27 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name               | Required | Default | Description                                                                                                            |
-| ------------------ | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
-| tag_location       | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)                                                         |
-| tag_string         | False    | ''      | Tag string to check (version format, signature check skipped)                                                          |
-| require_type       | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated)                                                |
-| require_signed     | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`                                                           |
-| require_github     | False    | false   | Requires that signing key is registered to a GitHub account                                                            |
-| require_gerrit     | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname)              |
-| require_owner      | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                                           |
-| reject_development | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                                       |
-| enforce_increment  | False    | false   | Require tag to be strictly greater than the highest existing tag in the repository                                     |
-| require_branch     | False    | ''      | Require tag commit reachable from a branch (name, or `true` to auto-detect the default branch)                         |
-| require_recent     | False    | false   | Require tag created within a time window (`true` for 3 minutes, or a custom window in minutes); needs an annotated tag |
-| require_latest     | False    | false   | Require tag to point to the current tip commit of the target branch                                                    |
-| permit_missing     | False    | false   | Allow missing tags without error                                                                                       |
-| token              | False    | ''      | GitHub token for authenticated API calls and private repo access                                                       |
-| github_server_url  | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                                       |
-| debug              | False    | false   | Enable debug output including git error messages                                                                       |
+| Name                | Required | Default | Description                                                                                                            |
+| ------------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| tag_location        | False    | ''      | Path to tag: remote (ORG/REPO/TAG) or local (PATH/TO/REPO/TAG)                                                         |
+| tag_string          | False    | ''      | Tag string to check (version format, signature check skipped)                                                          |
+| require_type        | False    | ''      | Required tag type: `semver`, `calver`, `both`, `none` (comma-separated)                                                |
+| require_signed      | False    | ''      | Signature type: `gpg`, `ssh`, `gpg-unverifiable`, `unsigned`                                                           |
+| trusted_gpg_keys    | False    | ''      | ASCII-armoured public GPG key(s); GPG verification uses these keys and no others                                       |
+| require_fingerprint | False    | ''      | Primary key fingerprint(s) a verified GPG signature must come from (comma or space separated)                          |
+| permit_expired_key  | False    | false   | Accept a good GPG signature made before its key expired                                                                |
+| require_github      | False    | false   | Requires that signing key is registered to a GitHub account                                                            |
+| require_gerrit      | False    | false   | Requires that signing key is registered to a Gerrit account (true for auto-discovery, or server hostname)              |
+| require_owner       | False    | ''      | GitHub/Gerrit username(s)/email(s) that must own signing key                                                           |
+| reject_development  | False    | false   | Reject development/pre-release tags (alpha, beta, rc, dev, etc.)                                                       |
+| enforce_increment   | False    | false   | Require tag to be strictly greater than the highest existing tag in the repository                                     |
+| require_branch      | False    | ''      | Require tag commit reachable from a branch (name, or `true` to auto-detect the default branch)                         |
+| require_recent      | False    | false   | Require tag created within a time window (`true` for 3 minutes, or a custom window in minutes); needs an annotated tag |
+| require_latest      | False    | false   | Require tag to point to the current tip commit of the target branch                                                    |
+| permit_missing      | False    | false   | Allow missing tags without error                                                                                       |
+| token               | False    | ''      | GitHub token for authenticated API calls and private repo access                                                       |
+| github_server_url   | False    | ''      | GitHub server URL (for GitHub Enterprise Server)                                                                       |
+| debug               | False    | false   | Enable debug output including git error messages                                                                       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -213,6 +216,44 @@ Controls cryptographic signature types. Accepts comma-separated values.
 
 **Note:** Input is case-insensitive. The action skips signature checking when
 using `tag_string` mode.
+
+#### `trusted_gpg_keys`
+
+ASCII-armoured public GPG key(s), for example a repository variable holding
+a project's release key. When set, the action writes the keys to a private
+file under `RUNNER_TEMP`, verifies the tag against a temporary keyring that
+holds those keys and nothing else, and removes both afterwards. The runner's
+default keyring is neither read nor changed, so a key that an earlier step
+imported cannot make a tag pass.
+
+The action fails before verification when the input holds no public key or
+holds a secret key. Not supported with `tag_string`.
+
+#### `require_fingerprint`
+
+Primary key fingerprint(s), 40 hex digits each, separated by commas or
+spaces; case and the spaces in GnuPG's grouped form do not matter. Short and
+long key IDs are refused. When set, the tag must carry a verified GPG
+signature made by one of these keys or one of its subkeys, compared on the
+primary key fingerprint in full.
+
+The check fails closed: unsigned, lightweight, SSH, `gpg-unverifiable` and
+`invalid` tags all fail, whatever `require_signed` allows. Without
+`trusted_gpg_keys` the action verifies against the default keyring, as
+before, and still applies the pin. Not supported with `tag_string`.
+
+#### `permit_expired_key`
+
+Default `false`. A signature from an expired or revoked key, or an expired
+signature, fails with a message naming the state. When `true`, one case
+counts as verified: a good signature from a key that has since expired,
+dated before the key's expiry. The fingerprint pin still applies, the run
+prints a `::warning::`, and the step summary names the key and its expiry
+date. A revoked key, an expired signature, a bad signature and a signature
+dated after the key expired always fail.
+
+**Note:** The signature time is the signer's own claim. This option trusts
+whoever holds the key not to backdate a signature past the key's expiry.
 
 #### `require_github`
 
@@ -585,18 +626,19 @@ When enabled, the action will output:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name            | Description                                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| valid           | Set to `true` if tag passes all validation checks                                              |
-| tag_type        | Detected tag type: `semver`, `calver`, `both`, or `other`                                      |
-| signing_type    | Signing method used: `unsigned`, `ssh`, `gpg`, `gpg-unverifiable`, `lightweight`, or `invalid` |
-| development_tag | Set to `true` if tag contains pre-release/development strings                                  |
-| version_prefix  | Set to `true` if tag has leading v/V character                                                 |
-| tag_name        | The tag name under inspection                                                                  |
-| incremental     | Set to `true` if tag increments the repository version (empty when check not performed)        |
-| latest_tag      | Highest existing comparable tag used as the baseline (empty when check not performed)          |
-| recent          | Set to `true` if tag was created within the `require_recent` window (empty when not performed) |
-| latest          | Set to `true` if tag points to the current branch tip (empty when check not performed)         |
+| Name                    | Description                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| valid                   | Set to `true` if tag passes all validation checks                                              |
+| tag_type                | Detected tag type: `semver`, `calver`, `both`, or `other`                                      |
+| signing_type            | Signing method used: `unsigned`, `ssh`, `gpg`, `gpg-unverifiable`, `lightweight`, or `invalid` |
+| signing_key_fingerprint | Primary key fingerprint of the key behind a verified GPG signature (empty unless verified)     |
+| development_tag         | Set to `true` if tag contains pre-release/development strings                                  |
+| version_prefix          | Set to `true` if tag has leading v/V character                                                 |
+| tag_name                | The tag name under inspection                                                                  |
+| incremental             | Set to `true` if tag increments the repository version (empty when check not performed)        |
+| latest_tag              | Highest existing comparable tag used as the baseline (empty when check not performed)          |
+| recent                  | Set to `true` if tag was created within the `require_recent` window (empty when not performed) |
+| latest                  | Set to `true` if tag points to the current branch tip (empty when check not performed)         |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -937,6 +979,7 @@ Notes:
 - **ERRSIG vs BADSIG distinction**: ERRSIG (missing key) returns `gpg-unverifiable` to allow consumers to make informed security decisions; BADSIG (failed verification) returns `invalid`.
 - A `lightweight` tag is functionally treated as an unsigned tag for policy enforcement, but surfaced distinctly for clarity.
 - `invalid` signature states cause failure when `require_signed` is `gpg` or `ssh`.
+- A signature from a revoked or expired key (REVKEYSIG, EXPKEYSIG) or an expired signature (EXPSIG) returns `invalid`, and the failure names that state. With `permit_expired_key: true`, a good signature made before its key expired returns `gpg`.
 
 ### GitHub API Response Handling
 
@@ -1053,19 +1096,23 @@ tags signed with unknown or untrusted keys from bypassing signature requirements
 
 - Omit `require_signed` (accepts any signature state)
 - Use `require_signed=gpg-unverifiable` (accepts unverifiable GPG signatures)
-- Or import the GPG key into your keyring for verification
+- Or supply the public key with `trusted_gpg_keys` for verification
 
-**Example workflow with key import:**
+**Example workflow with a supplied release key:**
+
+Pass the public key to the action rather than importing it with
+`gpg --import`: any earlier step in the job can add keys to the default
+keyring, while `trusted_gpg_keys` verifies against the supplied keys alone.
+Pin the key's primary fingerprint so that no other key can pass.
 
 ```yaml
-- name: Import GPG keys
-  run: |
-    echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --import
-
 - name: Check tag signature
-  uses: lfreleng-actions/tag-validate-action@v1
+  uses: lfreleng-actions/tag-validate-action@<commit-sha>
   with:
+    require_type: semver
     require_signed: gpg
+    trusted_gpg_keys: ${{ vars.RELEASE_PUBLIC_KEY }}
+    require_fingerprint: '63DDFF3B52B3F1AD3709C15144931D585CCBDA33'
 ```
 
 ## Troubleshooting

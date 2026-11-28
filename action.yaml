@@ -40,6 +40,31 @@ inputs:
       Omit for no signature requirement.
     required: false
     default: ''
+  trusted_gpg_keys:
+    description: >-
+      ASCII-armoured public GPG key(s). When set, GPG verification uses
+      these keys and no others, in a temporary keyring removed
+      afterwards; the runner's default keyring is neither read nor
+      changed. Must not hold a secret key. Not supported with tag_string.
+    required: false
+    default: ''
+  require_fingerprint:
+    description: >-
+      Primary key fingerprint(s), 40 hex digits each, comma or space
+      separated; GnuPG's grouped form is accepted. When set, the tag passes
+      only with a verified GPG signature made by one of these keys or
+      its subkeys, whatever require_signed allows. Key IDs are refused.
+      Not supported with tag_string.
+    required: false
+    default: ''
+  permit_expired_key:
+    description: >-
+      Count a good GPG signature from a key that has since expired as
+      verified, when the signature is dated before the key expired.
+      Revoked keys, expired signatures and signatures dated after the
+      key expired still fail.
+    required: false
+    default: 'false'
   require_github:
     description: >-
       Requires that the signing key is registered to a GitHub account.
@@ -189,6 +214,11 @@ outputs:
     # yamllint disable rule:line-length
     description: 'Detected signing type (gpg|ssh|unsigned|lightweight|invalid|gpg-unverifiable)'
     value: ${{ steps.validate.outputs.signing_type }}
+  signing_key_fingerprint:
+    description: >-
+      Primary key fingerprint of the key that verified a GPG signature
+      (empty unless the signature verified)
+    value: ${{ steps.validate.outputs.signing_key_fingerprint }}
   development_tag:
     description: 'Set true if development/pre-release tag detected'
     value: ${{ steps.validate.outputs.development_tag }}
@@ -392,6 +422,8 @@ runs:
         esac
         REQUIRE_LATEST=$(printf '%s\n' "${INPUTS_REQUIRE_LATEST}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         PERMIT_MISSING=$(printf '%s\n' "${INPUTS_PERMIT_MISSING}" | tr '[:upper:]' '[:lower:]')
+        REQUIRE_FINGERPRINT=$(printf '%s\n' "${INPUTS_REQUIRE_FINGERPRINT}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        PERMIT_EXPIRED_KEY=$(printf '%s\n' "${INPUTS_PERMIT_EXPIRED_KEY}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         DEBUG=$(printf '%s\n' "${INPUTS_DEBUG}" | tr '[:upper:]' '[:lower:]')
         USE_LOCAL_ACTION=$(printf '%s\n' "${INPUTS_USE_LOCAL_ACTION}" | tr '[:upper:]' '[:lower:]')
         UPLOAD_JSON=$(printf '%s\n' "${INPUTS_UPLOAD_JSON}" | tr '[:upper:]' '[:lower:]')
@@ -424,6 +456,7 @@ runs:
         development_tag=false
         version_prefix=false
         tag_name=
+        signing_key_fingerprint=
         EOFOUTPUT
           exit 0
         else
@@ -437,6 +470,11 @@ runs:
           if [ "${ENFORCE_INCREMENT}" = "true" ] || [ -n "${REQUIRE_BRANCH}" ] || \
              [ -n "${REQUIRE_RECENT}" ] || [ "${REQUIRE_LATEST}" = "true" ]; then
             echo "Error: enforce_increment, require_branch, require_recent and require_latest require a repository context" >&2
+            echo "Use tag_location (or a tag push event) instead of tag_string" >&2
+            exit 1
+          fi
+          if [ -n "${INPUTS_TRUSTED_GPG_KEYS}" ] || [ -n "${REQUIRE_FINGERPRINT}" ]; then
+            echo "Error: trusted_gpg_keys and require_fingerprint require a repository context" >&2
             echo "Use tag_location (or a tag push event) instead of tag_string" >&2
             exit 1
           fi
@@ -473,6 +511,22 @@ runs:
               VERIFY_ARGS+=("--require-signed" "${REQUIRE_SIGNED}")
               ;;
           esac
+        fi
+
+        # Supplied GPG keys go to a private file under RUNNER_TEMP,
+        # removed when the step ends. Pass the new options only when set,
+        # so an older CLI fails on them rather than skipping the gate.
+        if [ -n "${INPUTS_TRUSTED_GPG_KEYS}" ]; then
+          TRUSTED_KEYS_FILE=$(umask 077 && mktemp "${RUNNER_TEMP}/tag-validate-trusted-keys-XXXXXX")
+          trap 'rm -f "${TRUSTED_KEYS_FILE}"' EXIT
+          printf '%s\n' "${INPUTS_TRUSTED_GPG_KEYS}" > "${TRUSTED_KEYS_FILE}"
+          VERIFY_ARGS+=("--trusted-gpg-keys" "${TRUSTED_KEYS_FILE}")
+        fi
+        if [ -n "${REQUIRE_FINGERPRINT}" ]; then
+          VERIFY_ARGS+=("--require-fingerprint" "${REQUIRE_FINGERPRINT}")
+        fi
+        if [ "${PERMIT_EXPIRED_KEY}" = "true" ]; then
+          VERIFY_ARGS+=("--permit-expired-key")
         fi
 
         # Add GitHub key verification if requested
@@ -621,19 +675,19 @@ runs:
             ALL_VERIFY_ARGS+=("--no-github-step-summary")
           fi
 
-          # If upload_json is enabled, add --json-file flag to write JSON while showing rich output
-          if [ "${UPLOAD_JSON}" = "true" ]; then
-            # Create temp file for JSON output
-            JSON_FILE="${RUNNER_TEMP}/tag-validate-output.json"
-            ALL_VERIFY_ARGS+=("--json-file" "${JSON_FILE}")
-          fi
+          # Always write the JSON report: it feeds the step outputs
+          # (signing_key_fingerprint among them), and the artifact when
+          # upload_json is enabled.
+          JSON_FILE="${RUNNER_TEMP}/tag-validate-output.json"
+          rm -f "${JSON_FILE}"
+          ALL_VERIFY_ARGS+=("--json-file" "${JSON_FILE}")
 
           echo "🔍 Executing: ${CLI_CMD[*]} ${VERBOSE_FLAG} verify \"${TAG_LOCATION}\" ${ALL_VERIFY_ARGS[@]}"
           "${CLI_CMD[@]}" ${VERBOSE_FLAG} verify "${TAG_LOCATION}" "${ALL_VERIFY_ARGS[@]}" || EXIT_CODE=$?
           echo ""  # Add blank line after rich output
 
           # Read JSON from file if it was created
-          if [ "${UPLOAD_JSON}" = "true" ] && [ -f "${JSON_FILE}" ]; then
+          if [ -n "${JSON_FILE:-}" ] && [ -f "${JSON_FILE}" ]; then
             JSON_OUTPUT=$(cat "${JSON_FILE}")
             rm -f "${JSON_FILE}"
           fi
@@ -714,6 +768,7 @@ runs:
         latest_tag = ""
         recent = ""
         latest = ""
+        signing_key_fingerprint = ""
 
         # Try to parse JSON if available
         if json_output:
@@ -757,6 +812,11 @@ runs:
                     recent = "true" if data.get("recent") else "false"
                 if "latest" in data:
                     latest = "true" if data.get("latest") else "false"
+
+                # Primary fingerprint of the key behind a verified GPG signature
+                details = data.get("signature_details") or {}
+                if data.get("signature_verified") is True and signature_type == "gpg":
+                    signing_key_fingerprint = details.get("primary_fingerprint") or ""
             except Exception as e:
                 print(f"Warning: Could not parse JSON output, using defaults: {e}", file=sys.stderr)
 
@@ -765,6 +825,7 @@ runs:
             f.write(f"valid={success}\n")
             f.write(f"tag_type={version_type}\n")
             f.write(f"signing_type={signature_type}\n")
+            f.write(f"signing_key_fingerprint={signing_key_fingerprint}\n")
             f.write(f"development_tag={is_dev}\n")
             f.write(f"version_prefix={has_prefix}\n")
             f.write(f"tag_name={tag_name}\n")
@@ -804,6 +865,9 @@ runs:
         EVENT_AFTER: ${{ github.event.after }}
         INPUTS_REQUIRE_LATEST: ${{ inputs.require_latest }}
         INPUTS_PERMIT_MISSING: ${{ inputs.permit_missing }}
+        INPUTS_TRUSTED_GPG_KEYS: ${{ inputs.trusted_gpg_keys }}
+        INPUTS_REQUIRE_FINGERPRINT: ${{ inputs.require_fingerprint }}
+        INPUTS_PERMIT_EXPIRED_KEY: ${{ inputs.permit_expired_key }}
         INPUTS_DEBUG: ${{ inputs.debug }}
         INPUTS_USE_LOCAL_ACTION: ${{ inputs.use_local_action }}
         INPUTS_UPLOAD_JSON: ${{ inputs.upload_json }}

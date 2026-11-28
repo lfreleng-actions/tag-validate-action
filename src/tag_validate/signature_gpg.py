@@ -12,7 +12,10 @@ those three share.
 
 import logging
 import re
+from pathlib import Path
+from typing import Any
 
+from .gpg_trust import format_epoch, key_expiry
 from .models import SignatureInfo
 
 # Bound to the public module's name so log records keep reporting
@@ -36,6 +39,136 @@ class GpgSignatureMixin:
         r"Primary key fingerprint:\s+([A-F0-9\s]+)",
         re.IGNORECASE,
     )
+
+    async def _parse_gpg_output(
+        self,
+        tag_name: str,
+        verify_output: str,
+        gnupg_home: Path | None,
+        permit_expired_key: bool,
+    ) -> SignatureInfo | None:
+        """Parse GPG verification output, or return None when not GPG."""
+        statuses = self._gpg_status_keywords(verify_output)
+        if "BADSIG" in verify_output:
+            return await self._parse_invalid_gpg_signature(tag_name, verify_output)
+        if "ERRSIG" in verify_output:
+            return await self._parse_unverifiable_gpg_signature(tag_name, verify_output)
+        if statuses & {"REVKEYSIG", "EXPSIG", "EXPKEYSIG"}:
+            return self._parse_gpg_key_state(
+                tag_name, verify_output, gnupg_home, permit_expired_key
+            )
+        if (
+            "GOODSIG" in verify_output
+            or "using RSA key" in verify_output
+            or "using DSA key" in verify_output
+            or "using ECDSA key" in verify_output
+            or "using EdDSA key" in verify_output
+        ):
+            return await self._parse_gpg_signature(tag_name, verify_output)
+        return None
+
+    @staticmethod
+    def _gpg_status_keywords(verify_output: str) -> set[str]:
+        """Return the keywords of the ``[GNUPG:]`` status lines."""
+        keywords: set[str] = set()
+        for line in verify_output.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "[GNUPG:]":
+                keywords.add(parts[1])
+        return keywords
+
+    @staticmethod
+    def _validsig_fields(verify_output: str) -> list[str] | None:
+        """Return the fields after ``VALIDSIG``, or None when absent."""
+        for line in verify_output.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[:2] == ["[GNUPG:]", "VALIDSIG"]:
+                return parts[2:]
+        return None
+
+    def _extract_gpg_primary_fingerprint(self, verify_output: str) -> str | None:
+        """Return the primary key fingerprint, the last VALIDSIG field."""
+        fields = self._validsig_fields(verify_output)
+        # <fpr> <date> <ts> <expire> <ver> <reserved> <pk> <hash> <class> <primary>
+        if fields and len(fields) >= 10:
+            return fields[9].upper()
+        return None
+
+    def _parse_gpg_key_state(
+        self,
+        tag_name: str,
+        verify_output: str,
+        gnupg_home: Path | None,
+        permit_expired_key: bool,
+    ) -> SignatureInfo:
+        """Parse a good signature from a revoked or expired key, or an
+        expired signature.
+
+        Only a signature from an expired key, made before that key
+        expired, can count as verified, and only with
+        ``permit_expired_key``.
+        """
+        statuses = self._gpg_status_keywords(verify_output)
+        primary = self._extract_gpg_primary_fingerprint(verify_output)
+        fields = self._validsig_fields(verify_output)
+        rejected = SignatureInfo(
+            type="invalid",
+            verified=False,
+            key_id=self._extract_gpg_key_id(verify_output),
+            fingerprint=self._extract_gpg_fingerprint(verify_output),
+            signer_email=self._extract_gpg_signer_email(verify_output),
+            signature_data=verify_output,
+            primary_fingerprint=primary,
+        )
+
+        update = self._key_state_update(
+            tag_name, statuses, primary, fields, gnupg_home, permit_expired_key
+        )
+        checked: SignatureInfo = rejected.model_copy(update=update)
+        return checked
+
+    @staticmethod
+    def _key_state_update(
+        tag_name: str,
+        statuses: set[str],
+        primary: str | None,
+        fields: list[str] | None,
+        gnupg_home: Path | None,
+        permit_expired_key: bool,
+    ) -> dict[str, Any]:
+        """Return the fields that record a key or signature state."""
+        if "REVKEYSIG" in statuses or "KEYREVOKED" in statuses:
+            logger.warning(f"Tag {tag_name} is signed by a revoked GPG key")
+            return {"key_state": "revoked-key"}
+        if "EXPSIG" in statuses:
+            logger.warning(f"Tag {tag_name} carries an expired GPG signature")
+            return {"key_state": "expired-signature"}
+
+        expiry = None
+        if primary and fields:
+            expiry = key_expiry(gnupg_home, primary, fields[0])
+        expiry_text = format_epoch(expiry) if expiry is not None else None
+        signed_at = fields[2] if fields and len(fields) >= 3 else ""
+        signed_before_expiry = (
+            expiry is not None and signed_at.isdigit() and int(signed_at) < expiry
+        )
+        if not signed_before_expiry:
+            logger.warning(f"Tag {tag_name} was signed after its GPG key expired")
+            return {"key_state": "signed-after-expiry", "key_expiry": expiry_text}
+        if permit_expired_key:
+            logger.warning(
+                f"Tag {tag_name} is signed by a GPG key that expired on "
+                f"{expiry_text}; accepted by permit_expired_key"
+            )
+            return {
+                "type": "gpg",
+                "verified": True,
+                "key_state": "expired-key",
+                "key_expired": True,
+                "key_expiry": expiry_text,
+            }
+        logger.warning(f"Tag {tag_name} is signed by an expired GPG key")
+        return {"key_state": "expired-key", "key_expiry": expiry_text}
 
     async def _parse_gpg_signature(
         self, tag_name: str, verify_output: str
@@ -72,6 +205,7 @@ class GpgSignatureMixin:
             fingerprint=fingerprint,
             signer_email=signer_email,
             signature_data=verify_output,
+            primary_fingerprint=self._extract_gpg_primary_fingerprint(verify_output),
         )
 
     async def _parse_invalid_gpg_signature(

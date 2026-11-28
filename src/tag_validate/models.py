@@ -84,6 +84,27 @@ class SignatureInfo(BaseModel):
         default=None, description="Email address from the signature"
     )
     signature_data: str | None = Field(default=None, description="Raw signature data")
+    primary_fingerprint: str | None = Field(
+        default=None,
+        description="Primary key fingerprint of the GPG key that made the signature",
+    )
+    key_source: Literal["supplied", "keyring"] | None = Field(
+        default=None,
+        description="GPG keys verified against: supplied keys or the default keyring",
+    )
+    key_state: (
+        Literal[
+            "expired-key", "revoked-key", "expired-signature", "signed-after-expiry"
+        ]
+        | None
+    ) = Field(default=None, description="GPG key or signature state, when not good")
+    key_expired: bool = Field(
+        default=False,
+        description="True when permit_expired_key admitted an expired key",
+    )
+    key_expiry: str | None = Field(
+        default=None, description="When the signing key expired (ISO 8601 UTC)"
+    )
 
 
 class ValidationConfig(BaseModel):
@@ -108,6 +129,20 @@ class ValidationConfig(BaseModel):
     allowed_signature_types: list[str] | None = Field(
         default=None,
         description="Specific signature types allowed (gpg, ssh, gpg-unverifiable, unsigned)",
+    )
+
+    # GPG key trust
+    trusted_gpg_keys: str | None = Field(
+        default=None,
+        description="File of ASCII-armoured public keys to verify GPG signatures against",
+    )
+    require_fingerprints: list[str] | None = Field(
+        default=None,
+        description="Primary key fingerprints a verified GPG signature must match",
+    )
+    permit_expired_key: bool = Field(
+        default=False,
+        description="Accept a good signature made before its key expired",
     )
 
     # GitHub verification
