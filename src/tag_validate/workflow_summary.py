@@ -8,6 +8,7 @@ and key verification) shown by the CLI.
 """
 
 from .display_utils import format_server_display, format_user_details
+from .gpg_trust import normalize_fingerprint
 from .models import SignatureInfo, ValidationConfig, ValidationResult
 from .workflow_context import WorkflowContext
 
@@ -126,6 +127,7 @@ class WorkflowSummaryMixin(WorkflowContext):
             result.config.require_signed
             or result.config.require_unsigned
             or result.config.allowed_signature_types
+            or result.config.require_fingerprints
         ):
             signature_valid = self._check_signature_requirements_status(
                 result.signature_info, result.config
@@ -143,6 +145,12 @@ class WorkflowSummaryMixin(WorkflowContext):
                 lines.append(f"  Signer: {s.signer_email}")
             if s.key_id:
                 lines.append(f"  Key ID: {s.key_id}")
+            if s.primary_fingerprint:
+                lines.append(f"  Primary Fingerprint: {s.primary_fingerprint}")
+            if s.key_source:
+                lines.append(f"  Key Source: {s.key_source}")
+            if s.key_expired:
+                lines.append(f"  Key Expired: {s.key_expiry} (permitted)")
         lines.append("")
         return lines
 
@@ -288,6 +296,14 @@ class WorkflowSummaryMixin(WorkflowContext):
         Returns:
             bool: True if signature requirements are met
         """
+        if config.require_fingerprints and not (
+            signature_info.type == "gpg"
+            and signature_info.verified
+            and normalize_fingerprint(signature_info.primary_fingerprint or "")
+            in {normalize_fingerprint(f) for f in config.require_fingerprints}
+        ):
+            return False
+
         # Check if specific signature types are allowed
         if config.allowed_signature_types:
             if signature_info.type not in config.allowed_signature_types:

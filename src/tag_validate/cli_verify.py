@@ -10,6 +10,7 @@ tag, and reports the outcome to the console, a JSON file and the GitHub
 step summary.
 """
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -113,8 +114,28 @@ async def _run_workflow(
         raise
 
 
+def _warn_expired_key(result: Any) -> None:
+    """Print a GitHub Actions warning when an expired key was let through.
+
+    Written to stderr, so the annotation also appears with ``--json``
+    without disturbing the JSON on stdout.
+    """
+    signature = result.signature_info
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not (
+        signature and signature.key_expired
+    ):
+        return
+    typer.echo(
+        f"::warning::GPG signing key {signature.primary_fingerprint} expired "
+        f"on {signature.key_expiry}; signature accepted by permit_expired_key",
+        err=True,
+    )
+
+
 def _emit_verify_results(result: Any, workflow: Any, options: VerifyOptions) -> None:
     """Render the validation result to every requested destination."""
+    _warn_expired_key(result)
+
     if options.json_output:
         console.print_json(data=build_console_output(result))
     else:

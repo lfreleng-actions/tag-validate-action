@@ -12,6 +12,7 @@ codes shared by every command implementation.
 import logging
 import sys
 
+import typer
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -110,3 +111,18 @@ def log_unexpected_error(message: str, error: Exception) -> None:
         logger.exception(message)
     else:
         logger.error(f"{message}: {error}")
+
+
+def reject_input(error_msg: str, json_output: bool) -> typer.Exit:
+    """Report invalid CLI input and build the exit to raise."""
+    if json_output:
+        console.print_json(
+            data={
+                "success": False,
+                "error": error_msg,
+                "exit_code": EXIT_INVALID_INPUT,
+            }
+        )
+    else:
+        console.print(f"\n[red]❌ Error:[/red] {error_msg}")
+    return typer.Exit(EXIT_INVALID_INPUT)

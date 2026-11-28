@@ -51,6 +51,9 @@ def _signature_details(result: Any) -> dict[str, Any]:
         "signer_email": result.signature_info.signer_email,
         "key_id": result.signature_info.key_id,
         "fingerprint": result.signature_info.fingerprint,
+        "primary_fingerprint": result.signature_info.primary_fingerprint,
+        "key_source": result.signature_info.key_source,
+        "key_expired": result.signature_info.key_expired,
     }
 
 

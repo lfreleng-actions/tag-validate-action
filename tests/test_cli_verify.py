@@ -643,6 +643,9 @@ class TestGerritVerification:
         mock_result.signature_info.signer_email = None
         mock_result.signature_info.key_id = "SHA256:abc123"
         mock_result.signature_info.fingerprint = "SHA256:abc123"
+        mock_result.signature_info.primary_fingerprint = None
+        mock_result.signature_info.key_source = None
+        mock_result.signature_info.key_expired = False
 
         # Version info with all required attributes for JSON
         mock_result.version_info = Mock()

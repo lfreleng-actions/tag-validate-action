@@ -98,6 +98,18 @@ def _signature_rows(signature_info: SignatureInfo) -> list[str]:
         rows.append(f"| **Key ID** | `{signature_info.key_id}` |")
     if signature_info.fingerprint:
         rows.append(f"| **Fingerprint** | `{signature_info.fingerprint}` |")
+    if signature_info.primary_fingerprint:
+        rows.append(
+            f"| **Primary Fingerprint** | `{signature_info.primary_fingerprint}` |"
+        )
+    if signature_info.key_source:
+        rows.append(f"| **Key Source** | `{signature_info.key_source}` |")
+    if signature_info.key_expired:
+        rows.append(
+            f"| **⚠️ Expired Key** | `{signature_info.primary_fingerprint}` "
+            f"expired on `{signature_info.key_expiry}`; accepted by "
+            "`permit_expired_key` |"
+        )
 
     rows.append(
         f"| **Signature Verified** | `{str(signature_info.verified).lower()}` |"

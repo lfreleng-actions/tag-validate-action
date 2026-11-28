@@ -9,6 +9,7 @@ the configured signing requirements.
 
 import logging
 
+from .gpg_trust import describe_key_state, normalize_fingerprint
 from .models import SignatureInfo, TagInfo, ValidationResult
 from .workflow_context import WorkflowContext
 
@@ -65,7 +66,11 @@ class WorkflowSignatureMixin(WorkflowContext):
             Exception: If signature detection fails
         """
         logger.debug(f"Detecting signature: {tag_name}")
-        signature_info = await self.detector.detect_signature(tag_name)
+        signature_info = await self.detector.detect_signature(
+            tag_name,
+            trusted_gpg_keys=self.config.trusted_gpg_keys,
+            permit_expired_key=self.config.permit_expired_key,
+        )
 
         # For SSH signatures, use tagger email as fallback if signer_email is not set
         if (
@@ -76,13 +81,8 @@ class WorkflowSignatureMixin(WorkflowContext):
             logger.debug(
                 f"Using tagger email as signer email for SSH signature: {tag_info.tagger_email}"
             )
-            signature_info = SignatureInfo(
-                type=signature_info.type,
-                verified=signature_info.verified,
-                signer_email=tag_info.tagger_email,
-                key_id=signature_info.key_id,
-                fingerprint=signature_info.fingerprint,
-                signature_data=signature_info.signature_data,
+            signature_info = signature_info.model_copy(
+                update={"signer_email": tag_info.tagger_email}
             )
 
         logger.debug(
@@ -97,7 +97,68 @@ class WorkflowSignatureMixin(WorkflowContext):
         signature_info: SignatureInfo,
         result: ValidationResult,
     ) -> bool:
-        """Check if signature meets requirements.
+        """Check the fingerprint pin, then the signature type requirements.
+
+        A failure caused by a revoked or expired key, an expired
+        signature, or one made after its key expired names that state.
+
+        Args:
+            signature_info: Detected signature information
+            result: Validation result to update
+
+        Returns:
+            bool: True if requirements are met
+        """
+        passed = self._check_fingerprint_pin(
+            signature_info, result
+        ) and self._check_signature_type_requirements(signature_info, result)
+        state = describe_key_state(signature_info)
+        if not passed and state:
+            result.add_error(state)
+        if signature_info.key_expired:
+            result.add_warning(
+                f"GPG signing key {signature_info.primary_fingerprint} expired "
+                f"on {signature_info.key_expiry}; signature accepted by "
+                "permit_expired_key"
+            )
+        return passed
+
+    def _check_fingerprint_pin(
+        self,
+        signature_info: SignatureInfo,
+        result: ValidationResult,
+    ) -> bool:
+        """Require a verified GPG signature from a pinned primary key.
+
+        Fails closed: with fingerprints pinned, anything but a verified
+        GPG signature fails, whatever the signature type requirements
+        allow. The key ID of an unverified signature is never matched.
+        """
+        pinned = self.config.require_fingerprints
+        if not pinned:
+            return True
+        if not (signature_info.type == "gpg" and signature_info.verified):
+            result.add_error(
+                "Tag must carry a verified GPG signature from a pinned key "
+                f"(require_fingerprint); found signature type "
+                f"'{signature_info.type}'"
+            )
+            return False
+        primary = normalize_fingerprint(signature_info.primary_fingerprint or "")
+        if primary and primary in {normalize_fingerprint(f) for f in pinned}:
+            return True
+        result.add_error(
+            f"GPG signing key {primary or 'unknown'} does not match any "
+            "pinned fingerprint (require_fingerprint)"
+        )
+        return False
+
+    def _check_signature_type_requirements(
+        self,
+        signature_info: SignatureInfo,
+        result: ValidationResult,
+    ) -> bool:
+        """Check if signature meets the signature type requirements.
 
         Args:
             signature_info: Detected signature information

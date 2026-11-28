@@ -79,6 +79,32 @@ VERIFY_REQUIRE_SIGNED = typer.Option(
     help="Require tag signature. Values: gpg, ssh, gpg-unverifiable, unsigned (comma or space-separated for multiple). Omit for no requirement.",
 )
 
+VERIFY_TRUSTED_GPG_KEYS = typer.Option(
+    None,
+    "--trusted-gpg-keys",
+    help=(
+        "File of ASCII-armoured public keys. GPG signatures are verified "
+        "against these keys only, in a temporary keyring; the default "
+        "keyring is not used"
+    ),
+)
+
+VERIFY_REQUIRE_FINGERPRINT = typer.Option(
+    None,
+    "--require-fingerprint",
+    help=(
+        "Primary key fingerprints (comma or space-separated). The tag "
+        "passes only with a verified GPG signature from one of these keys "
+        "or their subkeys"
+    ),
+)
+
+VERIFY_PERMIT_EXPIRED_KEY = typer.Option(
+    False,
+    "--permit-expired-key",
+    help=("Count a good GPG signature made before its key expired as verified"),
+)
+
 VERIFY_REQUIRE_GITHUB = typer.Option(
     False,
     "--require-github",

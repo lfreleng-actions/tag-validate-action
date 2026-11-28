@@ -79,12 +79,14 @@ from .cli_options_tag import (
     VERIFY_NETRC_OPTIONAL,
     VERIFY_NO_NETRC,
     VERIFY_OWNER,
+    VERIFY_PERMIT_EXPIRED_KEY,
     VERIFY_PERMIT_MISSING,
     VERIFY_REFERENCE_SOURCE,
     VERIFY_REFERENCE_TIME,
     VERIFY_REJECT_DEVELOPMENT,
     VERIFY_REPO_PATH,
     VERIFY_REQUIRE_BRANCH,
+    VERIFY_REQUIRE_FINGERPRINT,
     VERIFY_REQUIRE_GERRIT,
     VERIFY_REQUIRE_GITHUB,
     VERIFY_REQUIRE_LATEST,
@@ -94,6 +96,7 @@ from .cli_options_tag import (
     VERIFY_REQUIRE_TYPE,
     VERIFY_SKIP_VERSION_VALIDATION,
     VERIFY_TAG_LOCATION,
+    VERIFY_TRUSTED_GPG_KEYS,
 )
 from .cli_parsing import (
     check_version_type_match,
@@ -290,6 +293,9 @@ def verify(
     repo_path: Path = VERIFY_REPO_PATH,
     require_type: str | None = VERIFY_REQUIRE_TYPE,
     require_signed: str | None = VERIFY_REQUIRE_SIGNED,
+    trusted_gpg_keys: Path | None = VERIFY_TRUSTED_GPG_KEYS,
+    require_fingerprint: str | None = VERIFY_REQUIRE_FINGERPRINT,
+    permit_expired_key: bool = VERIFY_PERMIT_EXPIRED_KEY,
     require_github: bool = VERIFY_REQUIRE_GITHUB,
     require_gerrit: str | None = VERIFY_REQUIRE_GERRIT,
     owner: str | None = VERIFY_OWNER,
@@ -340,6 +346,9 @@ def verify(
         json_output=json_output,
         json_file=json_file,
         github_step_summary=github_step_summary,
+        trusted_gpg_keys=trusted_gpg_keys,
+        require_fingerprint=require_fingerprint,
+        permit_expired_key=permit_expired_key,
     )
     asyncio.run(
         run_verify(
